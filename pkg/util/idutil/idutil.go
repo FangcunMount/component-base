@@ -4,8 +4,8 @@ import (
 	"crypto/rand"
 	"time"
 
-	"github.com/fangcun-mount/component-base/pkg/util/iputil"
-	"github.com/fangcun-mount/component-base/pkg/util/stringutil"
+	"github.com/FangcunMount/component-base/pkg/util/iputil"
+	"github.com/FangcunMount/component-base/pkg/util/stringutil"
 	"github.com/sony/sonyflake"
 	hashids "github.com/speps/go-hashids"
 )

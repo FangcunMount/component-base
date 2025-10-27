@@ -7,6 +7,7 @@ require (
 	github.com/mattheath/base62 v0.0.0-20150408093626-b80cdc656a7a
 	github.com/sony/sonyflake v1.3.0
 	github.com/speps/go-hashids v2.0.0+incompatible
+	gorm.io/gorm v1.30.0
 )
 
 require (
@@ -15,7 +16,6 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	golang.org/x/text v0.20.0 // indirect
-	gorm.io/gorm v1.30.0 // indirect
 )
 
 require (

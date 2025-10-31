@@ -44,7 +44,7 @@ func (m *MySQLConnection) Type() DatabaseType {
 
 // Connect 连接 MySQL 数据库
 func (m *MySQLConnection) Connect() error {
-	dsn := fmt.Sprintf(`%s:%s@tcp(%s)/%s?charset=utf8&parseTime=%t&loc=%s`,
+	dsn := fmt.Sprintf(`%s:%s@tcp(%s)/%s?charset=utf8&parseTime=%t&loc=%s&multiStatements=true`,
 		m.config.Username,
 		m.config.Password,
 		m.config.Host,

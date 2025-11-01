@@ -10,6 +10,8 @@
 - 支持结构化日志
 - 支持日志轮转
 - 支持多种日志库（Zap、Logrus、Klog）
+- **支持彩色日志输出**：不同级别的日志显示不同颜色
+- **日志级别带方括号**：更清晰的日志级别标识
 
 ## 快速开始
 
@@ -42,7 +44,8 @@ func main() {
 ```go
 log.Init(&log.Options{
     Level:      "debug",           // 日志级别
-    Format:     "json",            // 日志格式
+    Format:     "console",         // 日志格式 (console/json)
+    EnableColor: true,             // 启用彩色输出（仅 console 格式）
     OutputPaths: []string{         // 输出路径
         "stdout",
         "/var/log/app.log",
@@ -57,6 +60,40 @@ log.Init(&log.Options{
     Compress:   true,              // 是否压缩旧日志文件
 })
 ```
+
+### 彩色日志输出
+
+启用彩色输出可以让不同级别的日志更加醒目：
+
+```go
+log.Init(&log.Options{
+    Level:       "debug",
+    Format:      "console",
+    EnableColor: true,  // 启用彩色输出
+    OutputPaths: []string{"stdout"},
+})
+
+// 不同级别的日志将显示不同的颜色
+log.Debug("This is a debug message")   // 青色 [DEBUG]
+log.Info("This is an info message")    // 绿色 [INFO]
+log.Warn("This is a warning message")  // 黄色 [WARN]
+log.Error("This is an error message")  // 红色 [ERROR]
+```
+
+**注意**：
+
+- 彩色输出仅在 `console` 格式下生效
+- 输出到文件时建议关闭彩色输出（`EnableColor: false`）
+- 所有日志级别都会带有方括号 `[LEVEL]`，无论是否启用颜色
+
+**颜色方案**：
+
+- `[DEBUG]` - 青色（Cyan）
+- `[INFO]` - 绿色（Green）
+- `[WARN]` - 黄色（Yellow）
+- `[ERROR]` - 红色（Red）
+- `[FATAL]` - 红色（Red）
+- `[PANIC]` - 红色（Red）
 
 ## 日志级别
 
@@ -89,6 +126,78 @@ log.Init(&log.Options{
     MaxBackups: 10,     // 保留10个旧文件
     Compress:   true,   // 压缩旧文件
 })
+```
+
+## 日志分级输出
+
+支持将不同级别的日志输出到不同的文件，便于日志分析和问题排查。
+
+### 基本用法
+
+```go
+opts := log.NewOptions()
+opts.EnableLevelOutput = true
+opts.LevelOutputMode = "above" // 或 "exact"
+
+// 为不同级别配置输出路径
+opts.LevelOutputPaths = map[string][]string{
+    "debug": []string{"stdout"},
+    "info":  []string{"stdout", "/var/log/app-info.log"},
+    "warn":  []string{"/var/log/app-warn.log"},
+    "error": []string{"/var/log/app-error.log"},
+}
+
+log.Init(opts)
+```
+
+### 输出模式
+
+#### 1. Above 模式（默认）
+
+输出该级别及以上的日志：
+
+```go
+opts.LevelOutputMode = "above"
+opts.LevelOutputPaths = map[string][]string{
+    "info":  []string{"/var/log/info.log"},  // 包含: INFO, WARN, ERROR
+    "error": []string{"/var/log/error.log"}, // 包含: ERROR
+}
+```
+
+**适用场景**：
+
+- 需要在一个文件中查看所有重要日志
+- 错误日志单独存储，便于快速定位问题
+
+#### 2. Exact 模式
+
+只输出精确匹配的日志级别：
+
+```go
+opts.LevelOutputMode = "exact"
+opts.LevelOutputPaths = map[string][]string{
+    "debug": []string{"/var/log/debug.log"},  // 仅 DEBUG
+    "info":  []string{"/var/log/info.log"},   // 仅 INFO
+    "warn":  []string{"/var/log/warn.log"},   // 仅 WARN
+    "error": []string{"/var/log/error.log"},  // 仅 ERROR
+}
+```
+
+**适用场景**：
+
+- 需要精确统计各级别日志数量
+- 不同级别日志需要不同的处理策略
+
+### 示例
+
+查看 `pkg/log/example/leveloutput` 和 `pkg/log/example/exactlevel` 目录中的完整示例。
+
+```bash
+# 运行 above 模式示例
+go run pkg/log/example/leveloutput/main.go
+
+# 运行 exact 模式示例
+go run pkg/log/example/exactlevel/main.go
 ```
 
 ## 多种日志库支持

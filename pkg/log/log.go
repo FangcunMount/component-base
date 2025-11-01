@@ -199,6 +199,84 @@ func handleFields(l *zap.Logger, args []interface{}, additional ...zap.Field) []
 	return append(fields, additional...)
 }
 
+// newLoggerWithLevelOutput 创建支持分级输出的 logger
+func newLoggerWithLevelOutput(opts *Options, zapLevel zapcore.Level, encoderConfig zapcore.EncoderConfig) (*zap.Logger, error) {
+	var cores []zapcore.Core
+
+	// 创建 encoder
+	var encoder zapcore.Encoder
+	if opts.Format == jsonFormat {
+		encoder = zapcore.NewJSONEncoder(encoderConfig)
+	} else {
+		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+	}
+
+	// 为每个配置的日志级别创建 Core
+	for levelStr, paths := range opts.LevelOutputPaths {
+		var level zapcore.Level
+		if err := level.UnmarshalText([]byte(levelStr)); err != nil {
+			// 如果级别解析失败，跳过
+			continue
+		}
+
+		// 创建 WriteSyncer
+		writeSyncers := make([]zapcore.WriteSyncer, 0, len(paths))
+		for _, path := range paths {
+			ws, _, err := zap.Open(path)
+			if err != nil {
+				return nil, fmt.Errorf("failed to open log path %s: %w", path, err)
+			}
+			writeSyncers = append(writeSyncers, ws)
+		}
+
+		if len(writeSyncers) == 0 {
+			continue
+		}
+
+		// 组合多个 WriteSyncer
+		multiWriteSyncer := zapcore.NewMultiWriteSyncer(writeSyncers...)
+
+		// 创建 LevelEnabler
+		var levelEnabler zapcore.LevelEnabler
+		if opts.LevelOutputMode == "exact" {
+			// 只输出精确匹配的日志级别
+			levelEnabler = zap.LevelEnablerFunc(func(l zapcore.Level) bool {
+				return l == level
+			})
+		} else {
+			// 默认：输出该级别及以上的日志
+			levelEnabler = zap.LevelEnablerFunc(func(l zapcore.Level) bool {
+				return l >= level
+			})
+		}
+
+		// 创建 Core
+		core := zapcore.NewCore(encoder, multiWriteSyncer, levelEnabler)
+		cores = append(cores, core)
+	}
+
+	if len(cores) == 0 {
+		return nil, fmt.Errorf("no valid log output configured")
+	}
+
+	// 使用 Tee 组合多个 Core
+	core := zapcore.NewTee(cores...)
+
+	// 创建 logger
+	logger := zap.New(
+		core,
+		zap.AddCaller(),
+		zap.AddStacktrace(zapcore.PanicLevel),
+		zap.AddCallerSkip(1),
+	)
+
+	if opts.Development {
+		logger = logger.WithOptions(zap.Development())
+	}
+
+	return logger, nil
+}
+
 var (
 	std = New(NewOptions())
 	mu  sync.Mutex
@@ -221,10 +299,12 @@ func New(opts *Options) *zapLogger {
 	if err := zapLevel.UnmarshalText([]byte(opts.Level)); err != nil {
 		zapLevel = zapcore.InfoLevel
 	}
-	encodeLevel := zapcore.CapitalLevelEncoder
+
+	// 使用自定义的级别编码器，添加方括号和颜色
+	encodeLevel := customLevelEncoderNoColor
 	// when output to local path, with color is forbidden
 	if opts.Format == consoleFormat && opts.EnableColor {
-		encodeLevel = zapcore.CapitalColorLevelEncoder
+		encodeLevel = customLevelEncoder
 	}
 
 	encoderConfig := zapcore.EncoderConfig{
@@ -241,26 +321,35 @@ func New(opts *Options) *zapLogger {
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
 
-	loggerConfig := &zap.Config{
-		Level:             zap.NewAtomicLevelAt(zapLevel),
-		Development:       opts.Development,
-		DisableCaller:     opts.DisableCaller,
-		DisableStacktrace: opts.DisableStacktrace,
-		Sampling: &zap.SamplingConfig{
-			Initial:    100,
-			Thereafter: 100,
-		},
-		Encoding:         opts.Format,
-		EncoderConfig:    encoderConfig,
-		OutputPaths:      opts.OutputPaths,
-		ErrorOutputPaths: opts.ErrorOutputPaths,
+	var l *zap.Logger
+	var err error
+
+	// 如果启用了分级输出，使用自定义 Core
+	if opts.EnableLevelOutput && len(opts.LevelOutputPaths) > 0 {
+		l, err = newLoggerWithLevelOutput(opts, zapLevel, encoderConfig)
+	} else {
+		// 使用默认配置
+		loggerConfig := &zap.Config{
+			Level:             zap.NewAtomicLevelAt(zapLevel),
+			Development:       opts.Development,
+			DisableCaller:     opts.DisableCaller,
+			DisableStacktrace: opts.DisableStacktrace,
+			Sampling: &zap.SamplingConfig{
+				Initial:    100,
+				Thereafter: 100,
+			},
+			Encoding:         opts.Format,
+			EncoderConfig:    encoderConfig,
+			OutputPaths:      opts.OutputPaths,
+			ErrorOutputPaths: opts.ErrorOutputPaths,
+		}
+		l, err = loggerConfig.Build(zap.AddStacktrace(zapcore.PanicLevel), zap.AddCallerSkip(1))
 	}
 
-	var err error
-	l, err := loggerConfig.Build(zap.AddStacktrace(zapcore.PanicLevel), zap.AddCallerSkip(1))
 	if err != nil {
 		panic(err)
 	}
+
 	logger := &zapLogger{
 		zapLogger: l.Named(opts.Name),
 		infoLogger: infoLogger{

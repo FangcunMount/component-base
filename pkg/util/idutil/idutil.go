@@ -2,6 +2,7 @@ package idutil
 
 import (
 	"crypto/rand"
+	"fmt"
 	"time"
 
 	"github.com/FangcunMount/component-base/pkg/util/iputil"
@@ -128,4 +129,23 @@ func NewSecretID() string {
 // 生成32位随机字符串
 func NewSecretKey() string {
 	return randString(Alphabet62, 32)
+}
+
+// NewTraceID 生成追踪 ID（32位十六进制字符串）
+// 格式：trace-{timestamp}-{random}
+func NewTraceID() string {
+	return randString("0123456789abcdef", 32)
+}
+
+// NewSpanID 生成 Span ID（16位十六进制字符串）
+func NewSpanID() string {
+	return randString("0123456789abcdef", 16)
+}
+
+// NewRequestID 生成请求 ID
+// 格式：req-{timestamp}-{random}
+func NewRequestID() string {
+	timestamp := time.Now().UnixNano() / 1000000 // 毫秒时间戳
+	randomPart := randString(Alphabet36, 8)
+	return fmt.Sprintf("req-%d-%s", timestamp, randomPart)
 }

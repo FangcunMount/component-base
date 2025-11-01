@@ -311,6 +311,155 @@ log.Init(&log.Options{
 })
 ```
 
+## 链路追踪集成
+
+### 基本使用
+
+```go
+import (
+    "context"
+    "github.com/FangcunMount/component-base/pkg/log"
+    "github.com/FangcunMount/component-base/pkg/util/idutil"
+)
+
+func main() {
+    log.Init(log.NewOptions())
+    defer log.Flush()
+
+    // 创建追踪上下文
+    ctx := context.Background()
+    traceID := idutil.NewTraceID()    // 生成 32 字符 Trace ID
+    spanID := idutil.NewSpanID()      // 生成 16 字符 Span ID
+    requestID := idutil.NewRequestID() // 生成请求 ID
+    
+    ctx = log.WithTraceContext(ctx, traceID, spanID, requestID)
+    
+    // 使用带追踪信息的日志
+    log.InfoContext(ctx, "处理订单", log.String("order_id", "ORD-123"))
+    log.DebugContext(ctx, "验证库存")
+    log.ErrorContext(ctx, "库存不足")
+}
+```
+
+### HTTP 中间件集成
+
+```go
+import (
+    "net/http"
+    "github.com/FangcunMount/component-base/pkg/log"
+    "github.com/FangcunMount/component-base/pkg/log/middleware"
+)
+
+func main() {
+    log.Init(log.NewOptions())
+    defer log.Flush()
+    
+    // 创建 HTTP 处理器
+    handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        ctx := r.Context()
+        
+        // 日志会自动包含 trace_id, span_id, request_id
+        log.InfoContext(ctx, "处理请求", 
+            log.String("path", r.URL.Path),
+            log.String("method", r.Method),
+        )
+        
+        w.WriteHeader(http.StatusOK)
+    })
+    
+    // 使用追踪中间件
+    tracedHandler := middleware.TracingMiddleware(handler)
+    
+    http.ListenAndServe(":8080", tracedHandler)
+}
+```
+
+### 微服务调用链追踪
+
+```go
+// 服务 A 调用服务 B
+func callServiceB(ctx context.Context) {
+    // 创建子 span
+    spanID := idutil.NewSpanID()
+    childCtx := log.WithSpanID(ctx, spanID)
+    
+    log.InfoContext(childCtx, "调用服务 B", log.String("service", "service-b"))
+    
+    // 调用服务 B...
+    // 将 trace_id 和 span_id 通过 HTTP Header 传递
+}
+```
+
+### 追踪上下文 API
+
+```go
+// 注入完整追踪信息
+ctx = log.WithTraceContext(ctx, traceID, spanID, requestID)
+
+// 只更新 Span ID（创建子 span）
+ctx = log.WithSpanID(ctx, newSpanID)
+
+// 获取追踪信息
+traceID := log.TraceID(ctx)
+spanID := log.SpanID(ctx)
+requestID := log.RequestID(ctx)
+
+// 带追踪信息的日志方法
+log.InfoContext(ctx, "message", fields...)
+log.DebugContext(ctx, "message", fields...)
+log.WarnContext(ctx, "message", fields...)
+log.ErrorContext(ctx, "message", fields...)
+```
+
+### ID 生成工具
+
+```go
+import "github.com/FangcunMount/component-base/pkg/util/idutil"
+
+// 生成 Trace ID（32 字符十六进制，符合 OpenTelemetry 规范）
+traceID := idutil.NewTraceID()  // 例如：51c89d3c4c18d317915cae78f4221908
+
+// 生成 Span ID（16 字符十六进制）
+spanID := idutil.NewSpanID()    // 例如：2cc53d25e033223e
+
+// 生成 Request ID（带时间戳）
+requestID := idutil.NewRequestID()  // 例如：req-1761965855567-63dg7rsf
+```
+
+### HTTP 中间件特性
+
+追踪中间件自动处理：
+
+1. **提取追踪信息**：从 HTTP 请求头提取现有的 trace_id
+2. **生成追踪 ID**：如果请求没有 trace_id，自动生成新的
+3. **注入到上下文**：将追踪信息注入 context.Context
+4. **响应头返回**：在响应中添加 X-Trace-Id 和 X-Request-Id 头
+5. **自动记录**：记录请求开始和结束，包含耗时
+
+支持的 HTTP Header：
+- `X-Trace-Id`：分布式追踪 ID
+- `X-Span-Id`：当前 span ID
+- `X-Request-Id`：请求 ID
+
+### OpenTelemetry 集成（可选）
+
+如果需要与 OpenTelemetry 集成，可以参考 `pkg/log/otel/otel.go` 中的示例代码。
+
+### 示例程序
+
+查看完整示例：
+- `pkg/log/example/tracing/main.go` - 基础追踪示例
+- `pkg/log/example/microservices/main.go` - 微服务调用链示例
+
+运行示例：
+```bash
+# 基础追踪示例
+go run pkg/log/example/tracing/main.go
+
+# 微服务示例
+go run pkg/log/example/microservices/main.go
+```
+
 ## 最佳实践
 
 1. **选择合适的日志级别**：不要在生产环境使用debug级别
@@ -318,6 +467,9 @@ log.Init(&log.Options{
 3. **配置日志轮转**：避免日志文件过大
 4. **分离错误日志**：将错误日志输出到单独的文件
 5. **使用有意义的日志消息**：便于问题排查
+6. **使用链路追踪**：在微服务架构中使用追踪 ID 关联日志
+7. **传递追踪上下文**：跨服务调用时通过 HTTP Header 传递追踪信息
+8. **创建子 Span**：在关键操作时创建新的 Span ID，便于定位问题
 
 ## 许可证
 

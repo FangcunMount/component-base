@@ -8,10 +8,11 @@
 - 支持多种输出方式（文件、控制台、网络）
 - 支持日志级别控制
 - 支持结构化日志
-- 支持日志轮转
+- **支持日志轮转**：按大小轮转、按时间轮转（天、小时、月等）
 - 支持多种日志库（Zap、Logrus、Klog）
 - **支持彩色日志输出**：不同级别的日志显示不同颜色
 - **日志级别带方括号**：更清晰的日志级别标识
+- **支持日志分级输出**：不同级别日志输出到不同文件
 
 ## 快速开始
 
@@ -126,6 +127,58 @@ log.Init(&log.Options{
     MaxBackups: 10,     // 保留10个旧文件
     Compress:   true,   // 压缩旧文件
 })
+```
+
+### 按时间轮转
+
+支持按时间自动轮转日志文件，可以按天、按小时、按月等方式分割日志。
+
+#### 按天轮转
+
+```go
+opts := log.NewOptions()
+opts.EnableTimeRotation = true
+opts.TimeRotationFormat = "2006-01-02"  // 按天轮转
+opts.MaxAge = 7                          // 保留7天
+opts.OutputPaths = []string{"/var/log/app.log"}
+log.Init(opts)
+// 生成的文件名：app.2025-11-01.log, app.2025-11-02.log, ...
+```
+
+#### 按小时轮转
+
+```go
+opts := log.NewOptions()
+opts.EnableTimeRotation = true
+opts.TimeRotationFormat = "2006-01-02-15"  // 按小时轮转
+opts.MaxAge = 24                            // 保留24小时
+opts.OutputPaths = []string{"/var/log/app.log"}
+log.Init(opts)
+// 生成的文件名：app.2025-11-01-10.log, app.2025-11-01-11.log, ...
+```
+
+**其他支持的时间格式**：
+
+- `2006-01-02`: 按天轮转
+- `2006-01-02-15`: 按小时轮转
+- `2006-01`: 按月轮转
+- `2006-W01`: 按周轮转（需要自定义）
+
+**优势**：
+
+- 日志文件按时间自然分割，便于查找和分析
+- 适合长时间运行的服务
+- 可以根据业务需求设置不同的轮转粒度
+- 自动清理过期日志，节省磁盘空间
+
+**示例**：
+
+```bash
+# 运行按天轮转示例
+go run pkg/log/example/dailyrotation/main.go
+
+# 运行按小时轮转示例
+go run pkg/log/example/hourlyrotation/main.go
 ```
 
 ## 日志分级输出

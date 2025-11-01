@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 
 	"go.uber.org/zap"
@@ -222,11 +223,27 @@ func newLoggerWithLevelOutput(opts *Options, zapLevel zapcore.Level, encoderConf
 		// 创建 WriteSyncer
 		writeSyncers := make([]zapcore.WriteSyncer, 0, len(paths))
 		for _, path := range paths {
-			ws, _, err := zap.Open(path)
-			if err != nil {
-				return nil, fmt.Errorf("failed to open log path %s: %w", path, err)
+			var ws zapcore.WriteSyncer
+
+			// 判断是否为特殊路径
+			if path == "stdout" || path == "stderr" {
+				// 使用 zap.Open 处理 stdout/stderr
+				ws, _, err := zap.Open(path)
+				if err != nil {
+					return nil, fmt.Errorf("failed to open log path %s: %w", path, err)
+				}
+				writeSyncers = append(writeSyncers, ws)
+			} else {
+				// 文件路径：根据配置选择轮转方式
+				if opts.EnableTimeRotation {
+					// 使用时间轮转
+					ws = NewTimeRotationWriter(path, opts.TimeRotationFormat, opts.MaxAge, opts.Compress)
+				} else {
+					// 使用大小轮转（lumberjack）
+					ws = getLumberjackWriter(path, opts)
+				}
+				writeSyncers = append(writeSyncers, ws)
 			}
-			writeSyncers = append(writeSyncers, ws)
 		}
 
 		if len(writeSyncers) == 0 {
@@ -272,6 +289,64 @@ func newLoggerWithLevelOutput(opts *Options, zapLevel zapcore.Level, encoderConf
 
 	if opts.Development {
 		logger = logger.WithOptions(zap.Development())
+	}
+
+	return logger, nil
+}
+
+// newLoggerWithTimeRotation 创建支持时间轮转的 logger
+func newLoggerWithTimeRotation(opts *Options, zapLevel zapcore.Level, encoderConfig zapcore.EncoderConfig) (*zap.Logger, error) {
+	// 创建 encoder
+	var encoder zapcore.Encoder
+	if opts.Format == jsonFormat {
+		encoder = zapcore.NewJSONEncoder(encoderConfig)
+	} else {
+		encoder = zapcore.NewConsoleEncoder(encoderConfig)
+	}
+
+	// 处理输出路径
+	var writeSyncers []zapcore.WriteSyncer
+	for _, path := range opts.OutputPaths {
+		if path == "stdout" {
+			writeSyncers = append(writeSyncers, zapcore.AddSync(os.Stdout))
+		} else if path == "stderr" {
+			writeSyncers = append(writeSyncers, zapcore.AddSync(os.Stderr))
+		} else {
+			// 文件路径，使用时间轮转
+			writer := NewTimeRotationWriter(path, opts.TimeRotationFormat, opts.MaxAge, opts.Compress)
+			writeSyncers = append(writeSyncers, zapcore.AddSync(writer))
+		}
+	}
+
+	if len(writeSyncers) == 0 {
+		return nil, fmt.Errorf("no valid output paths configured")
+	}
+
+	// 创建 Core
+	core := zapcore.NewCore(
+		encoder,
+		zapcore.NewMultiWriteSyncer(writeSyncers...),
+		zapLevel,
+	)
+
+	// 创建 logger
+	logger := zap.New(
+		core,
+		zap.AddCaller(),
+		zap.AddStacktrace(zapcore.PanicLevel),
+		zap.AddCallerSkip(1),
+	)
+
+	if opts.Development {
+		logger = logger.WithOptions(zap.Development())
+	}
+
+	if !opts.DisableCaller {
+		logger = logger.WithOptions(zap.AddCaller())
+	}
+
+	if !opts.DisableStacktrace {
+		logger = logger.WithOptions(zap.AddStacktrace(zapcore.ErrorLevel))
 	}
 
 	return logger, nil
@@ -327,6 +402,9 @@ func New(opts *Options) *zapLogger {
 	// 如果启用了分级输出，使用自定义 Core
 	if opts.EnableLevelOutput && len(opts.LevelOutputPaths) > 0 {
 		l, err = newLoggerWithLevelOutput(opts, zapLevel, encoderConfig)
+	} else if opts.EnableTimeRotation {
+		// 如果启用了时间轮转，使用自定义 Core
+		l, err = newLoggerWithTimeRotation(opts, zapLevel, encoderConfig)
 	} else {
 		// 使用默认配置
 		loggerConfig := &zap.Config{

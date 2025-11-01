@@ -60,7 +60,7 @@ type Options struct {
 	MaxAge     int  `json:"max-age"     mapstructure:"max-age"`     // 保留旧日志文件的最大天数
 	MaxBackups int  `json:"max-backups" mapstructure:"max-backups"` // 保留旧日志文件的最大个数
 	Compress   bool `json:"compress"    mapstructure:"compress"`    // 是否压缩旧日志文件
-	
+
 	// 按时间轮转配置
 	EnableTimeRotation bool   `json:"enable-time-rotation" mapstructure:"enable-time-rotation"` // 是否启用按时间轮转
 	TimeRotationFormat string `json:"time-rotation-format" mapstructure:"time-rotation-format"` // 时间轮转格式，如 "2006-01-02" 表示按天
@@ -80,21 +80,21 @@ type Options struct {
 // NewOptions creates an Options object with default parameters.
 func NewOptions() *Options {
 	return &Options{
-		Level:             zapcore.InfoLevel.String(),
-		DisableCaller:     false,
-		DisableStacktrace: false,
-		Format:            consoleFormat,
-		EnableColor:       false,
-		Development:       false,
-		OutputPaths:       []string{"stdout"},
-		ErrorOutputPaths:  []string{"stderr"},
-		MaxSize:            100,      // 100MB
-		MaxAge:             30,       // 30天
-		MaxBackups:         10,       // 保留10个备份文件
-		Compress:           true,     // 压缩旧文件
-		EnableTimeRotation: false,    // 默认不启用按时间轮转
+		Level:              zapcore.InfoLevel.String(),
+		DisableCaller:      false,
+		DisableStacktrace:  false,
+		Format:             consoleFormat,
+		EnableColor:        false,
+		Development:        false,
+		OutputPaths:        []string{"stdout"},
+		ErrorOutputPaths:   []string{"stderr"},
+		MaxSize:            100,          // 100MB
+		MaxAge:             30,           // 30天
+		MaxBackups:         10,           // 保留10个备份文件
+		Compress:           true,         // 压缩旧文件
+		EnableTimeRotation: false,        // 默认不启用按时间轮转
 		TimeRotationFormat: "2006-01-02", // 默认按天轮转
-		EnableLevelOutput:  false,    // 默认不启用分级输出
+		EnableLevelOutput:  false,        // 默认不启用分级输出
 		LevelOutputPaths:   make(map[string][]string),
 		LevelOutputMode:    "above", // 默认输出该级别及以上的日志
 	}
@@ -154,6 +154,12 @@ func (o *Options) AddFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&o.MaxAge, "log.max-age", o.MaxAge, "Maximum number of days to retain old log files.")
 	fs.IntVar(&o.MaxBackups, "log.max-backups", o.MaxBackups, "Maximum number of old log files to retain.")
 	fs.BoolVar(&o.Compress, "log.compress", o.Compress, "Compress rotated log files.")
+
+	// 添加按时间轮转相关的命令行参数
+	fs.BoolVar(&o.EnableTimeRotation, "log.enable-time-rotation", o.EnableTimeRotation,
+		"Enable time-based log rotation (e.g., daily rotation).")
+	fs.StringVar(&o.TimeRotationFormat, "log.time-rotation-format", o.TimeRotationFormat,
+		"Time rotation format (e.g., '2006-01-02' for daily, '2006-01-02-15' for hourly).")
 
 	// 添加日志分级输出相关的命令行参数
 	fs.BoolVar(&o.EnableLevelOutput, "log.enable-level-output", o.EnableLevelOutput,

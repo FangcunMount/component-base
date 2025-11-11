@@ -67,13 +67,16 @@ type Options struct {
 
 	// 日志分级输出配置
 	// 为不同日志级别配置独立的输出路径
-	// 例如: {"info": []string{"stdout", "/var/log/info.log"}, "error": []string{"/var/log/error.log"}}
+	// 例如: {"all": []string{"/var/log/app.log"}, "error": []string{"/var/log/error.log"}}
 	LevelOutputPaths map[string][]string `json:"level-output-paths" mapstructure:"level-output-paths"`
 	// 是否启用分级输出（如果为 true，则使用 LevelOutputPaths；否则使用 OutputPaths）
 	EnableLevelOutput bool `json:"enable-level-output" mapstructure:"enable-level-output"`
 	// 分级输出模式：
-	// "exact" - 只输出精确匹配的日志级别
-	// "above" - 输出该级别及以上的日志（默认）
+	// "exact"     - 只输出精确匹配的日志级别（例如：info 文件只记录 INFO 级别）
+	// "above"     - 输出该级别及以上的日志（例如：info 文件记录 INFO、WARN、ERROR）
+	// "duplicate" - 支持重复输出，"all" 记录所有日志，其他级别额外记录（推荐）
+	//               例如：{"all": ["app.log"], "error": ["error.log"]}
+	//               app.log 记录所有日志，error.log 只额外记录 error
 	LevelOutputMode string `json:"level-output-mode" mapstructure:"level-output-mode"`
 }
 
@@ -96,7 +99,7 @@ func NewOptions() *Options {
 		TimeRotationFormat: "2006-01-02", // 默认按天轮转
 		EnableLevelOutput:  false,        // 默认不启用分级输出
 		LevelOutputPaths:   make(map[string][]string),
-		LevelOutputMode:    "above", // 默认输出该级别及以上的日志
+		LevelOutputMode:    "duplicate", // 默认使用 duplicate 模式（推荐）
 	}
 }
 

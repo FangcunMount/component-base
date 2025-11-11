@@ -190,14 +190,12 @@ go run pkg/log/example/hourlyrotation/main.go
 ```go
 opts := log.NewOptions()
 opts.EnableLevelOutput = true
-opts.LevelOutputMode = "above" // 或 "exact"
+opts.LevelOutputMode = "duplicate" // 推荐使用 duplicate 模式
 
-// 为不同级别配置输出路径
+// 配置输出路径
 opts.LevelOutputPaths = map[string][]string{
-    "debug": []string{"stdout"},
-    "info":  []string{"stdout", "/var/log/app-info.log"},
-    "warn":  []string{"/var/log/app-warn.log"},
-    "error": []string{"/var/log/app-error.log"},
+    "all":   []string{"/var/log/app.log"},   // 记录所有日志
+    "error": []string{"/var/log/error.log"}, // 额外记录错误
 }
 
 log.Init(opts)
@@ -205,7 +203,30 @@ log.Init(opts)
 
 ### 输出模式
 
-#### 1. Above 模式（默认）
+#### 1. Duplicate 模式（推荐，默认）
+
+支持重复输出，适合生产环境：
+
+```go
+opts.LevelOutputMode = "duplicate"
+opts.LevelOutputPaths = map[string][]string{
+    "all":   []string{"/var/log/app.log"},   // 记录所有级别日志
+    "error": []string{"/var/log/error.log"}, // 额外记录 ERROR
+    "warn":  []string{"/var/log/warn.log"},  // 额外记录 WARN（可选）
+}
+```
+
+**输出结果**：
+- `app.log`: 包含 DEBUG, INFO, WARN, ERROR（完整日志）
+- `error.log`: 只包含 ERROR（便于快速定位故障）
+- `warn.log`: 只包含 WARN（便于发现潜在问题）
+
+**适用场景**：
+- ✅ **生产环境推荐**：完整日志 + 错误日志分离
+- ✅ 需要快速定位错误，同时保留完整上下文
+- ✅ 配合监控系统，对 error.log 设置告警
+
+#### 2. Above 模式
 
 输出该级别及以上的日志：
 
@@ -217,12 +238,17 @@ opts.LevelOutputPaths = map[string][]string{
 }
 ```
 
+**输出结果**：
+- `info.log`: INFO + WARN + ERROR
+- `error.log`: 仅 ERROR
+
 **适用场景**：
-
 - 需要在一个文件中查看所有重要日志
-- 错误日志单独存储，便于快速定位问题
+- 错误日志单独存储
 
-#### 2. Exact 模式
+⚠️ **注意**：此模式下日志会重复（info.log 和 error.log 都包含 ERROR）
+
+#### 3. Exact 模式
 
 只输出精确匹配的日志级别：
 
@@ -236,18 +262,58 @@ opts.LevelOutputPaths = map[string][]string{
 }
 ```
 
-**适用场景**：
+**输出结果**：
+- 每个文件只包含对应级别的日志
+- 没有重复，严格分离
 
+**适用场景**：
 - 需要精确统计各级别日志数量
 - 不同级别日志需要不同的处理策略
 
+### 生产环境推荐配置
+
+```go
+opts := log.NewOptions()
+opts.Level = "info"                  // INFO 及以上
+opts.Format = "json"                 // JSON 格式便于分析
+opts.EnableLevelOutput = true
+opts.LevelOutputMode = "duplicate"   // 使用 duplicate 模式
+opts.EnableTimeRotation = true       // 启用按天轮转
+opts.TimeRotationFormat = "2006-01-02"
+opts.MaxAge = 30                     // 保留 30 天
+opts.Compress = true                 // 压缩旧日志
+
+opts.LevelOutputPaths = map[string][]string{
+    "all":   []string{"/var/log/app.log"},   // 完整日志
+    "error": []string{"/var/log/error.log"}, // 错误日志（设置告警）
+}
+
+log.Init(opts)
+```
+
+**优势**：
+- ✅ `app.log` 包含完整日志，便于问题追溯
+- ✅ `error.log` 只含错误，便于快速定位
+- ✅ 按天轮转，自动管理磁盘空间
+- ✅ JSON 格式，便于 ELK/日志分析工具处理
+
 ### 示例
 
-查看 `pkg/log/example/leveloutput` 和 `pkg/log/example/exactlevel` 目录中的完整示例。
+查看各种模式的完整示例：
 
 ```bash
-# 运行 above 模式示例
+# Duplicate 模式（推荐）
+go run pkg/log/example/duplicatemode/main.go
+
+# 生产环境配置
+go run pkg/log/example/production/main.go
+
+# Above 模式
 go run pkg/log/example/leveloutput/main.go
+
+# Exact 模式
+go run pkg/log/example/exactlevel/main.go
+```
 
 # 运行 exact 模式示例
 go run pkg/log/example/exactlevel/main.go

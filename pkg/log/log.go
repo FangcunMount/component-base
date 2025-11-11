@@ -212,64 +212,99 @@ func newLoggerWithLevelOutput(opts *Options, zapLevel zapcore.Level, encoderConf
 		encoder = zapcore.NewConsoleEncoder(encoderConfig)
 	}
 
-	// 为每个配置的日志级别创建 Core
-	for levelStr, paths := range opts.LevelOutputPaths {
-		var level zapcore.Level
-		if err := level.UnmarshalText([]byte(levelStr)); err != nil {
-			// 如果级别解析失败，跳过
-			continue
-		}
+	// 根据不同的输出模式处理
+	if opts.LevelOutputMode == "duplicate" {
+		// duplicate 模式：支持多个输出目标
+		// 典型场景：app.log 记录所有日志，error.log 额外记录错误日志
 
-		// 创建 WriteSyncer
-		writeSyncers := make([]zapcore.WriteSyncer, 0, len(paths))
-		for _, path := range paths {
-			var ws zapcore.WriteSyncer
+		// 首先检查是否有 "all" 配置（记录所有级别）
+		if allPaths, ok := opts.LevelOutputPaths["all"]; ok && len(allPaths) > 0 {
+			// 为 "all" 创建一个记录所有日志的 Core
+			writeSyncers := make([]zapcore.WriteSyncer, 0, len(allPaths))
+			for _, path := range allPaths {
+				ws := createWriteSyncer(path, opts)
+				if ws != nil {
+					writeSyncers = append(writeSyncers, ws)
+				}
+			}
 
-			// 判断是否为特殊路径
-			if path == "stdout" || path == "stderr" {
-				// 使用 zap.Open 处理 stdout/stderr
-				ws, _, err := zap.Open(path)
-				if err != nil {
-					return nil, fmt.Errorf("failed to open log path %s: %w", path, err)
-				}
-				writeSyncers = append(writeSyncers, ws)
-			} else {
-				// 文件路径：根据配置选择轮转方式
-				if opts.EnableTimeRotation {
-					// 使用时间轮转
-					ws = NewTimeRotationWriter(path, opts.TimeRotationFormat, opts.MaxAge, opts.Compress)
-				} else {
-					// 使用大小轮转（lumberjack）
-					ws = getLumberjackWriter(path, opts)
-				}
-				writeSyncers = append(writeSyncers, ws)
+			if len(writeSyncers) > 0 {
+				multiWriteSyncer := zapcore.NewMultiWriteSyncer(writeSyncers...)
+				// 记录所有级别的日志（从配置的最低级别开始）
+				core := zapcore.NewCore(encoder, multiWriteSyncer, zapLevel)
+				cores = append(cores, core)
 			}
 		}
 
-		if len(writeSyncers) == 0 {
-			continue
+		// 然后为每个特定级别创建额外的输出
+		for levelStr, paths := range opts.LevelOutputPaths {
+			if levelStr == "all" {
+				continue // 已经处理过了
+			}
+
+			var level zapcore.Level
+			if err := level.UnmarshalText([]byte(levelStr)); err != nil {
+				continue
+			}
+
+			writeSyncers := make([]zapcore.WriteSyncer, 0, len(paths))
+			for _, path := range paths {
+				ws := createWriteSyncer(path, opts)
+				if ws != nil {
+					writeSyncers = append(writeSyncers, ws)
+				}
+			}
+
+			if len(writeSyncers) > 0 {
+				multiWriteSyncer := zapcore.NewMultiWriteSyncer(writeSyncers...)
+				// 只记录该特定级别的日志
+				levelEnabler := zap.LevelEnablerFunc(func(l zapcore.Level) bool {
+					return l == level
+				})
+				core := zapcore.NewCore(encoder, multiWriteSyncer, levelEnabler)
+				cores = append(cores, core)
+			}
 		}
 
-		// 组合多个 WriteSyncer
-		multiWriteSyncer := zapcore.NewMultiWriteSyncer(writeSyncers...)
+	} else {
+		// 原有的 exact 和 above 模式
+		for levelStr, paths := range opts.LevelOutputPaths {
+			var level zapcore.Level
+			if err := level.UnmarshalText([]byte(levelStr)); err != nil {
+				continue
+			}
 
-		// 创建 LevelEnabler
-		var levelEnabler zapcore.LevelEnabler
-		if opts.LevelOutputMode == "exact" {
-			// 只输出精确匹配的日志级别
-			levelEnabler = zap.LevelEnablerFunc(func(l zapcore.Level) bool {
-				return l == level
-			})
-		} else {
-			// 默认：输出该级别及以上的日志
-			levelEnabler = zap.LevelEnablerFunc(func(l zapcore.Level) bool {
-				return l >= level
-			})
+			writeSyncers := make([]zapcore.WriteSyncer, 0, len(paths))
+			for _, path := range paths {
+				ws := createWriteSyncer(path, opts)
+				if ws != nil {
+					writeSyncers = append(writeSyncers, ws)
+				}
+			}
+
+			if len(writeSyncers) == 0 {
+				continue
+			}
+
+			multiWriteSyncer := zapcore.NewMultiWriteSyncer(writeSyncers...)
+
+			// 创建 LevelEnabler
+			var levelEnabler zapcore.LevelEnabler
+			if opts.LevelOutputMode == "exact" {
+				// 只输出精确匹配的日志级别
+				levelEnabler = zap.LevelEnablerFunc(func(l zapcore.Level) bool {
+					return l == level
+				})
+			} else {
+				// 默认 above：输出该级别及以上的日志
+				levelEnabler = zap.LevelEnablerFunc(func(l zapcore.Level) bool {
+					return l >= level
+				})
+			}
+
+			core := zapcore.NewCore(encoder, multiWriteSyncer, levelEnabler)
+			cores = append(cores, core)
 		}
-
-		// 创建 Core
-		core := zapcore.NewCore(encoder, multiWriteSyncer, levelEnabler)
-		cores = append(cores, core)
 	}
 
 	if len(cores) == 0 {
@@ -292,6 +327,25 @@ func newLoggerWithLevelOutput(opts *Options, zapLevel zapcore.Level, encoderConf
 	}
 
 	return logger, nil
+}
+
+// createWriteSyncer 创建 WriteSyncer
+func createWriteSyncer(path string, opts *Options) zapcore.WriteSyncer {
+	// 判断是否为特殊路径
+	if path == "stdout" || path == "stderr" {
+		ws, _, err := zap.Open(path)
+		if err != nil {
+			return nil
+		}
+		return ws
+	}
+
+	// 文件路径：根据配置选择轮转方式
+	if opts.EnableTimeRotation {
+		return NewTimeRotationWriter(path, opts.TimeRotationFormat, opts.MaxAge, opts.Compress)
+	}
+
+	return getLumberjackWriter(path, opts)
 }
 
 // newLoggerWithTimeRotation 创建支持时间轮转的 logger

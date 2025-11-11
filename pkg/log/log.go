@@ -792,3 +792,181 @@ func (l *zapLogger) clone() *zapLogger {
 
 	return &copy
 }
+
+// 类型化日志辅助函数
+// 这些函数为不同类型的操作提供了便捷的日志记录方式，并自动添加 type 字段
+
+// HTTP 记录 HTTP 请求日志
+// 自动添加 type=HTTP 字段
+func HTTP(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "HTTP")}, fields...)
+	std.zapLogger.Info(msg, allFields...)
+}
+
+// HTTPDebug 记录 HTTP 请求的调试日志
+func HTTPDebug(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "HTTP")}, fields...)
+	std.zapLogger.Debug(msg, allFields...)
+}
+
+// HTTPWarn 记录 HTTP 请求的警告日志
+func HTTPWarn(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "HTTP")}, fields...)
+	std.zapLogger.Warn(msg, allFields...)
+}
+
+// HTTPError 记录 HTTP 请求的错误日志
+func HTTPError(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "HTTP")}, fields...)
+	std.zapLogger.Error(msg, allFields...)
+}
+
+// SQL 记录 SQL 查询日志
+// 自动添加 type=SQL 字段
+func SQL(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "SQL")}, fields...)
+	std.zapLogger.Info(msg, allFields...)
+}
+
+// SQLDebug 记录 SQL 查询的调试日志
+func SQLDebug(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "SQL")}, fields...)
+	std.zapLogger.Debug(msg, allFields...)
+}
+
+// SQLWarn 记录 SQL 查询的警告日志
+func SQLWarn(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "SQL")}, fields...)
+	std.zapLogger.Warn(msg, allFields...)
+}
+
+// SQLError 记录 SQL 查询的错误日志
+func SQLError(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "SQL")}, fields...)
+	std.zapLogger.Error(msg, allFields...)
+}
+
+// GRPC 记录 gRPC 调用日志
+// 自动添加 type=GRPC 字段
+func GRPC(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "GRPC")}, fields...)
+	std.zapLogger.Info(msg, allFields...)
+}
+
+// GRPCDebug 记录 gRPC 调用的调试日志
+func GRPCDebug(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "GRPC")}, fields...)
+	std.zapLogger.Debug(msg, allFields...)
+}
+
+// GRPCWarn 记录 gRPC 调用的警告日志
+func GRPCWarn(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "GRPC")}, fields...)
+	std.zapLogger.Warn(msg, allFields...)
+}
+
+// GRPCError 记录 gRPC 调用的错误日志
+func GRPCError(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "GRPC")}, fields...)
+	std.zapLogger.Error(msg, allFields...)
+}
+
+// Redis 记录 Redis 操作日志
+// 自动添加 type=Redis 字段
+func Redis(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "Redis")}, fields...)
+	std.zapLogger.Info(msg, allFields...)
+}
+
+// RedisDebug 记录 Redis 操作的调试日志
+func RedisDebug(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "Redis")}, fields...)
+	std.zapLogger.Debug(msg, allFields...)
+}
+
+// RedisWarn 记录 Redis 操作的警告日志
+func RedisWarn(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "Redis")}, fields...)
+	std.zapLogger.Warn(msg, allFields...)
+}
+
+// RedisError 记录 Redis 操作的错误日志
+func RedisError(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "Redis")}, fields...)
+	std.zapLogger.Error(msg, allFields...)
+}
+
+// MQ 记录消息队列操作日志
+// 自动添加 type=MQ 字段
+func MQ(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "MQ")}, fields...)
+	std.zapLogger.Info(msg, allFields...)
+}
+
+// MQDebug 记录消息队列操作的调试日志
+func MQDebug(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "MQ")}, fields...)
+	std.zapLogger.Debug(msg, allFields...)
+}
+
+// MQWarn 记录消息队列操作的警告日志
+func MQWarn(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "MQ")}, fields...)
+	std.zapLogger.Warn(msg, allFields...)
+}
+
+// MQError 记录消息队列操作的错误日志
+func MQError(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "MQ")}, fields...)
+	std.zapLogger.Error(msg, allFields...)
+}
+
+// Cache 记录缓存操作日志
+// 自动添加 type=Cache 字段
+func Cache(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "Cache")}, fields...)
+	std.zapLogger.Info(msg, allFields...)
+}
+
+// CacheDebug 记录缓存操作的调试日志
+func CacheDebug(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "Cache")}, fields...)
+	std.zapLogger.Debug(msg, allFields...)
+}
+
+// CacheWarn 记录缓存操作的警告日志
+func CacheWarn(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "Cache")}, fields...)
+	std.zapLogger.Warn(msg, allFields...)
+}
+
+// CacheError 记录缓存操作的错误日志
+func CacheError(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "Cache")}, fields...)
+	std.zapLogger.Error(msg, allFields...)
+}
+
+// RPC 记录 RPC 调用日志（通用）
+// 自动添加 type=RPC 字段
+func RPC(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "RPC")}, fields...)
+	std.zapLogger.Info(msg, allFields...)
+}
+
+// RPCDebug 记录 RPC 调用的调试日志
+func RPCDebug(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "RPC")}, fields...)
+	std.zapLogger.Debug(msg, allFields...)
+}
+
+// RPCWarn 记录 RPC 调用的警告日志
+func RPCWarn(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "RPC")}, fields...)
+	std.zapLogger.Warn(msg, allFields...)
+}
+
+// RPCError 记录 RPC 调用的错误日志
+func RPCError(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "RPC")}, fields...)
+	std.zapLogger.Error(msg, allFields...)
+}

@@ -4,6 +4,58 @@
 
 日志分级输出允许你将不同级别的日志输出到不同的文件或目标，这对于日志管理和问题排查非常有用。
 
+## 最新更新：Duplicate 模式（推荐）
+
+**问题**：之前的模式存在日志重复或难以追溯的问题。
+
+**解决**：新增 **Duplicate 模式**，实现"完整日志 + 关键日志分离"：
+- `app.log` 记录所有日志（完整上下文）
+- `error.log` 只额外记录 ERROR（快速定位）
+- 最小化重复，最大化实用性
+
+### 快速开始
+
+```go
+opts := log.NewOptions()
+opts.EnableLevelOutput = true
+opts.LevelOutputMode = "duplicate" // 推荐使用
+
+opts.LevelOutputPaths = map[string][]string{
+    "all":   []string{"/var/log/app.log"},   // 记录所有日志
+    "error": []string{"/var/log/error.log"}, // 额外记录错误
+}
+
+log.Init(opts)
+```
+
+### 输出效果示例
+
+输入日志：
+```
+[DEBUG] 调试信息
+[INFO]  用户登录
+[WARN]  内存使用率高
+[ERROR] 数据库连接失败
+```
+
+**app.log（完整）**：
+```
+[DEBUG] 调试信息
+[INFO]  用户登录
+[WARN]  内存使用率高
+[ERROR] 数据库连接失败
+```
+
+**error.log（只有错误）**：
+```
+[ERROR] 数据库连接失败
+```
+
+✅ **优势**：
+- app.log 提供完整上下文，便于问题追溯
+- error.log 只含错误，便于监控告警
+- ERROR 只额外记录一次，避免重复
+
 ## 配置项
 
 ### EnableLevelOutput
@@ -16,6 +68,10 @@
 ### LevelOutputPaths
 
 为不同日志级别配置输出路径的 map。
+
+**Duplicate 模式特殊键**：
+- `"all"`: 记录所有级别的日志（推荐）
+- 其他级别（如 `"error"`, `"warn"`）：只记录该特定级别
 
 ```go
 LevelOutputPaths: map[string][]string{

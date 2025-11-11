@@ -12,7 +12,9 @@
 - 支持多种日志库（Zap、Logrus、Klog）
 - **支持彩色日志输出**：不同级别的日志显示不同颜色
 - **日志级别带方括号**：更清晰的日志级别标识
-- **支持日志分级输出**：不同级别日志输出到不同文件
+- **支持日志分级输出**：不同级别日志输出到不同文件（Duplicate 模式推荐）
+- **支持类型化日志**：HTTP、SQL、gRPC、Redis 等类型标记，便于分析
+- **支持链路追踪**：自动追踪请求调用链
 
 ## 快速开始
 
@@ -526,16 +528,138 @@ go run pkg/log/example/tracing/main.go
 go run pkg/log/example/microservices/main.go
 ```
 
+## 类型化日志
+
+支持为不同类型的操作添加自动类型标记，便于日志分类和分析。
+
+### 支持的类型
+
+- **HTTP** - HTTP/REST API 请求日志
+- **SQL** - 数据库查询日志
+- **GRPC** - gRPC 服务调用日志
+- **Redis** - Redis 缓存操作日志
+- **MQ** - 消息队列操作日志
+- **Cache** - 通用缓存操作日志
+- **RPC** - 通用 RPC 调用日志
+
+### 基本使用
+
+```go
+// HTTP 请求日志（自动添加 type=HTTP）
+log.HTTP("GET /api/users",
+    log.String("method", "GET"),
+    log.String("path", "/api/users"),
+    log.Int("status", 200),
+    log.Float64("duration_ms", 45.6),
+)
+
+// SQL 查询日志（自动添加 type=SQL）
+log.SQL("查询用户信息",
+    log.String("query", "SELECT * FROM users WHERE id = ?"),
+    log.Int("rows", 1),
+    log.Float64("duration_ms", 12.3),
+)
+
+// gRPC 调用日志（自动添加 type=GRPC）
+log.GRPC("UserService.GetUser",
+    log.String("service", "UserService"),
+    log.String("method", "GetUser"),
+    log.String("code", "OK"),
+)
+
+// Redis 操作日志（自动添加 type=Redis）
+log.Redis("GET user:10086",
+    log.String("command", "GET"),
+    log.String("key", "user:10086"),
+    log.Bool("hit", true),
+)
+```
+
+### 不同级别
+
+每种类型都提供 4 个级别：
+
+```go
+log.HTTP()       // INFO 级别
+log.HTTPDebug()  // DEBUG 级别
+log.HTTPWarn()   // WARN 级别
+log.HTTPError()  // ERROR 级别
+```
+
+### 实际应用
+
+```go
+func HandleOrder(w http.ResponseWriter, r *http.Request) {
+    // 记录 HTTP 请求
+    log.HTTP("接收订单请求",
+        log.String("method", r.Method),
+        log.String("path", r.URL.Path),
+    )
+    
+    // 查询数据库
+    log.SQL("查询用户信息",
+        log.String("query", "SELECT * FROM users WHERE id = ?"),
+        log.Float64("duration_ms", 5.2),
+    )
+    
+    // 检查缓存
+    log.Redis("检查库存缓存",
+        log.String("key", "inventory:PROD-12345"),
+        log.Bool("hit", true),
+    )
+    
+    // 调用服务
+    log.GRPC("调用支付服务",
+        log.String("service", "PaymentService"),
+        log.String("method", "Charge"),
+    )
+    
+    // 发送消息
+    log.MQ("发送订单事件",
+        log.String("topic", "order-created"),
+    )
+}
+```
+
+### 日志分析
+
+类型化日志便于过滤和分析：
+
+```bash
+# 只查看 HTTP 日志
+cat app.log | grep '"type":"HTTP"'
+
+# 只查看 SQL 日志
+cat app.log | grep '"type":"SQL"'
+
+# 统计各类型日志数量
+cat app.log | jq -r '.type' | sort | uniq -c
+
+# 计算 HTTP 平均响应时间
+cat app.log | grep '"type":"HTTP"' | jq '.duration_ms' | awk '{sum+=$1; count++} END {print sum/count}'
+```
+
+### 详细文档
+
+查看完整的类型化日志文档：[TYPED_LOGS.md](TYPED_LOGS.md)
+
+运行示例：
+```bash
+go run pkg/log/example/typed-logs/main.go
+```
+
 ## 最佳实践
 
 1. **选择合适的日志级别**：不要在生产环境使用debug级别
 2. **使用结构化日志**：便于日志分析和搜索
 3. **配置日志轮转**：避免日志文件过大
-4. **分离错误日志**：将错误日志输出到单独的文件
+4. **分离错误日志**：将错误日志输出到单独的文件（使用 Duplicate 模式）
 5. **使用有意义的日志消息**：便于问题排查
 6. **使用链路追踪**：在微服务架构中使用追踪 ID 关联日志
 7. **传递追踪上下文**：跨服务调用时通过 HTTP Header 传递追踪信息
 8. **创建子 Span**：在关键操作时创建新的 Span ID，便于定位问题
+9. **使用类型化日志**：为不同操作使用对应的日志类型（HTTP、SQL、gRPC 等）
+10. **记录关键字段**：duration、status、error 等便于监控和分析
 
 ## 许可证
 

@@ -7,6 +7,7 @@ import (
 	"sync"
 )
 
+// unknownCoder 用于未知错误，这类错误确实应该返回 500
 var (
 	unknownCoder defaultCoder = defaultCoder{1, http.StatusInternalServerError, "An internal server error occurred", "http://github.com/marmotedu/errors/README.md"}
 )
@@ -54,9 +55,11 @@ func (coder defaultCoder) String() string {
 
 // HTTPStatus returns the associated HTTP status code, if any. Otherwise,
 // returns 200.
+// 对于已知的业务错误（有错误码的），默认返回 200，在响应体中包含错误码和错误信息。
+// 只有未设置 HTTP 状态码的错误才返回 200，而不是 500。
 func (coder defaultCoder) HTTPStatus() int {
 	if coder.HTTP == 0 {
-		return 500
+		return http.StatusOK
 	}
 
 	return coder.HTTP

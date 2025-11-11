@@ -47,6 +47,16 @@ rootErr := errors.Cause(err)
 
 ### 2. 错误码系统
 
+错误码系统提供了业务错误与 HTTP 状态码的映射机制：
+
+- **已知业务错误**：有明确错误码的业务错误，默认返回 HTTP 200，错误信息通过响应体中的错误码和消息传递
+- **未知系统错误**：没有错误码的系统级错误（如 panic、网络故障等），返回 HTTP 500
+
+这种设计可以让客户端更容易区分业务错误和系统错误：
+
+- HTTP 200 + 错误码：业务层面的可预期错误，客户端可以根据错误码做对应处理
+- HTTP 500：系统级严重错误，客户端应该进行重试或报警
+
 ```go
 // 定义错误码
 const (
@@ -54,14 +64,22 @@ const (
     CodeInvalidParam = 10002
 )
 
-// 注册错误码
+// 注册错误码（不指定 HTTP 状态码，默认返回 200）
 type UserNotFoundCoder struct{}
 func (c UserNotFoundCoder) Code() int { return CodeUserNotFound }
-func (c UserNotFoundCoder) HTTPStatus() int { return http.StatusNotFound }
+func (c UserNotFoundCoder) HTTPStatus() int { return 0 } // 返回 0 表示使用默认值 200
 func (c UserNotFoundCoder) String() string { return "用户不存在" }
 func (c UserNotFoundCoder) Reference() string { return "https://docs.example.com/errors#10001" }
 
+// 如果业务需要，也可以显式指定其他 HTTP 状态码
+type InvalidParamCoder struct{}
+func (c InvalidParamCoder) Code() int { return CodeInvalidParam }
+func (c InvalidParamCoder) HTTPStatus() int { return http.StatusBadRequest } // 显式指定 400
+func (c InvalidParamCoder) String() string { return "参数无效" }
+func (c InvalidParamCoder) Reference() string { return "https://docs.example.com/errors#10002" }
+
 errors.Register(UserNotFoundCoder{})
+errors.Register(InvalidParamCoder{})
 
 // 使用错误码
 err := errors.WithCode(CodeUserNotFound, "用户ID: %d", userID)
@@ -220,6 +238,92 @@ underlying := errors.Unwrap(err)
 ```
 
 ## 💡 使用场景
+
+### RESTful API 错误处理
+
+在 RESTful API 中，正确处理业务错误和系统错误：
+
+```go
+// 定义错误码
+const (
+    ErrCodeUserNotFound = 100001
+    ErrCodeInvalidParam = 100002
+)
+
+// 注册错误码
+type UserNotFoundCoder struct{}
+func (c UserNotFoundCoder) Code() int { return ErrCodeUserNotFound }
+func (c UserNotFoundCoder) HTTPStatus() int { return 0 } // 0 表示使用默认 200
+func (c UserNotFoundCoder) String() string { return "用户不存在" }
+func (c UserNotFoundCoder) Reference() string { return "https://docs.example.com/errors" }
+
+func init() {
+    errors.Register(UserNotFoundCoder{})
+}
+
+// 业务逻辑
+func GetUser(id int) (*User, error) {
+    if id <= 0 {
+        return nil, errors.WithCode(ErrCodeInvalidParam, "invalid user id: %d", id)
+    }
+    
+    user, err := userRepo.GetByID(id)
+    if err == sql.ErrNoRows {
+        return nil, errors.WithCode(ErrCodeUserNotFound, "user not found: %d", id)
+    }
+    if err != nil {
+        // 数据库错误，没有错误码，会返回 500
+        return nil, errors.Wrap(err, "failed to get user from database")
+    }
+    
+    return user, nil
+}
+
+// HTTP 处理器
+func HandleGetUser(w http.ResponseWriter, r *http.Request) {
+    id := extractID(r)
+    user, err := GetUser(id)
+    
+    if err != nil {
+        coder := errors.ParseCoder(err)
+        statusCode := coder.HTTPStatus() // 业务错误返回 200，系统错误返回 500
+        
+        response := map[string]interface{}{
+            "code":    coder.Code(),
+            "message": coder.String(),
+        }
+        
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(statusCode)
+        json.NewEncoder(w).Encode(response)
+        return
+    }
+    
+    // 成功响应
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusOK)
+    json.NewEncoder(w).Encode(map[string]interface{}{
+        "code": 0,
+        "data": user,
+    })
+}
+```
+
+**响应示例：**
+
+```json
+// 业务错误：HTTP 200
+{
+  "code": 100001,
+  "message": "用户不存在"
+}
+
+// 系统错误：HTTP 500
+{
+  "code": 1,
+  "message": "An internal server error occurred"
+}
+```
 
 ### API错误处理
 

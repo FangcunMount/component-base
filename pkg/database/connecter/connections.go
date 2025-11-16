@@ -8,15 +8,21 @@ import (
 type DatabaseType string
 
 const (
-	MySQL DatabaseType = "mysql"
-	Redis DatabaseType = "redis"
+	MySQL   DatabaseType = "mysql"
+	Redis   DatabaseType = "redis"
+	MongoDB DatabaseType = "mongodb"
 )
 
 // DatabaseConnection 数据库连接接口
 type DatabaseConnection interface {
+	// Type 返回数据库类型
 	Type() DatabaseType
+	// Connect 建立连接
 	Connect() error
+	// Close 关闭连接
 	Close() error
+	// HealthCheck 健康检查
 	HealthCheck(ctx context.Context) error
+	// GetClient 获取原始客户端
 	GetClient() interface{}
 }

@@ -4,27 +4,25 @@ import (
 	"context"
 	"fmt"
 	"sync"
-
-	connecter "github.com/FangcunMount/component-base/pkg/database/connecter"
 )
 
 // Registry 数据库注册器
 type Registry struct {
-	connections map[connecter.DatabaseType]connecter.DatabaseConnection
-	configs     map[connecter.DatabaseType]interface{}
+	connections map[DatabaseType]DatabaseConnection
+	configs     map[DatabaseType]interface{}
 	mutex       sync.RWMutex
 }
 
 // NewRegistry 创建数据库注册器
 func NewRegistry() *Registry {
 	return &Registry{
-		connections: make(map[connecter.DatabaseType]connecter.DatabaseConnection),
-		configs:     make(map[connecter.DatabaseType]interface{}),
+		connections: make(map[DatabaseType]DatabaseConnection),
+		configs:     make(map[DatabaseType]interface{}),
 	}
 }
 
 // Register 注册数据库连接
-func (r *Registry) Register(dbType connecter.DatabaseType, config interface{}, connection connecter.DatabaseConnection) error {
+func (r *Registry) Register(dbType DatabaseType, config interface{}, connection DatabaseConnection) error {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
@@ -39,7 +37,7 @@ func (r *Registry) Register(dbType connecter.DatabaseType, config interface{}, c
 }
 
 // GetConnection 获取数据库连接
-func (r *Registry) GetConnection(dbType connecter.DatabaseType) (connecter.DatabaseConnection, error) {
+func (r *Registry) GetConnection(dbType DatabaseType) (DatabaseConnection, error) {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
@@ -52,7 +50,7 @@ func (r *Registry) GetConnection(dbType connecter.DatabaseType) (connecter.Datab
 }
 
 // GetClient 获取数据库客户端
-func (r *Registry) GetClient(dbType connecter.DatabaseType) (interface{}, error) {
+func (r *Registry) GetClient(dbType DatabaseType) (interface{}, error) {
 	connection, err := r.GetConnection(dbType)
 	if err != nil {
 		return nil, err

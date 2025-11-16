@@ -1,4 +1,4 @@
-package connecter
+package database
 
 import (
 	"context"

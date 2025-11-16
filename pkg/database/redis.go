@@ -1,11 +1,11 @@
-package connecter
+package database
 
 import (
 	"context"
 	"fmt"
 	"log"
 
-	redis "github.com/go-redis/redis/v7"
+	redis "github.com/redis/go-redis/v9"
 )
 
 // RedisConfig Redis 数据库配置
@@ -73,7 +73,7 @@ func (r *RedisConnection) Connect() error {
 	}
 
 	// 测试连接
-	if err := client.Ping().Err(); err != nil {
+	if err := client.Ping(context.Background()).Err(); err != nil {
 		return fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
@@ -93,10 +93,12 @@ func (r *RedisConnection) Close() error {
 // HealthCheck 检查 Redis 连接是否健康
 func (r *RedisConnection) HealthCheck(ctx context.Context) error {
 	if r.client == nil {
-		return fmt.Errorf("Redis client is nil")
+		return fmt.Errorf("redis client is nil")
 	}
-
-	return r.client.Ping().Err()
+	if err := r.client.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("failed to ping Redis: %w", err)
+	}
+	return nil
 }
 
 // GetClient 获取 Redis 客户端

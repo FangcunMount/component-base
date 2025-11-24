@@ -13,6 +13,7 @@ type RedisConfig struct {
 	Host                  string   `json:"host" mapstructure:"host"`
 	Port                  int      `json:"port" mapstructure:"port"`
 	Addrs                 []string `json:"addrs" mapstructure:"addrs"`
+	Username              string   `json:"username" mapstructure:"username"`
 	Password              string   `json:"password" mapstructure:"password"`
 	Database              int      `json:"database" mapstructure:"database"`
 	MaxIdle               int      `json:"max-idle" mapstructure:"max-idle"`
@@ -60,12 +61,14 @@ func (r *RedisConnection) Connect() error {
 	if r.config.EnableCluster {
 		client = redis.NewClusterClient(&redis.ClusterOptions{
 			Addrs:    addrs,
+			Username: r.config.Username,
 			Password: r.config.Password,
 			PoolSize: r.config.MaxActive,
 		})
 	} else {
 		client = redis.NewClient(&redis.Options{
 			Addr:     addrs[0],
+			Username: r.config.Username,
 			Password: r.config.Password,
 			DB:       r.config.Database,
 			PoolSize: r.config.MaxActive,

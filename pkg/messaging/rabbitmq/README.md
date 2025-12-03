@@ -25,7 +25,7 @@ docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
 ### 2. 基本使用
 
 ```go
-import "github.com/FangcunMount/qs-server/pkg/messaging/rabbitmq"
+import "github.com/FangcunMount/component-base/pkg/messaging/rabbitmq"
 
 bus, _ := rabbitmq.NewEventBus("amqp://guest:guest@localhost:5672/")
 defer bus.Close()

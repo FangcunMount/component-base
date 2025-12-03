@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/FangcunMount/qs-server/pkg/messaging"
-	_ "github.com/FangcunMount/qs-server/pkg/messaging/nsq"
+	"github.com/FangcunMount/component-base/pkg/messaging"
+	_ "github.com/FangcunMount/component-base/pkg/messaging/nsq"
 )
 
 // 全局指标收集器

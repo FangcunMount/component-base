@@ -7,7 +7,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/FangcunMount/qs-server/pkg/messaging"
+	"github.com/FangcunMount/component-base/pkg/messaging"
 )
 
 // publisher RabbitMQ 发布者实现

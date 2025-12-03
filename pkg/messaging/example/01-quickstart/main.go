@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/FangcunMount/qs-server/pkg/messaging"
-	_ "github.com/FangcunMount/qs-server/pkg/messaging/nsq" // 自动注册 NSQ Provider
+	"github.com/FangcunMount/component-base/pkg/messaging"
+	_ "github.com/FangcunMount/component-base/pkg/messaging/nsq" // 自动注册 NSQ Provider
 )
 
 func main() {

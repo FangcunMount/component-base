@@ -3,7 +3,7 @@ package rabbitmq
 import (
 	"fmt"
 
-	"github.com/FangcunMount/qs-server/pkg/messaging"
+	"github.com/FangcunMount/component-base/pkg/messaging"
 )
 
 // 在包初始化时注册 RabbitMQ 提供者

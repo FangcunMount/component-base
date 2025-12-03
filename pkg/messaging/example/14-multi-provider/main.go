@@ -3,17 +3,17 @@
 package main
 
 import (
-"context"
-"fmt"
-"log"
-"os"
-"os/signal"
-"syscall"
-"time"
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-"github.com/FangcunMount/qs-server/pkg/messaging"
-_ "github.com/FangcunMount/qs-server/pkg/messaging/nsq"
-_ "github.com/FangcunMount/qs-server/pkg/messaging/rabbitmq"
+	"github.com/FangcunMount/component-base/pkg/messaging"
+	_ "github.com/FangcunMount/component-base/pkg/messaging/nsq"
+	_ "github.com/FangcunMount/component-base/pkg/messaging/rabbitmq"
 )
 
 func main() {
@@ -143,7 +143,7 @@ func (b *MessageBridge) Start(sourceTopic, targetTopic string) error {
 	// 订阅源消息并转发到目标
 	handler := func(ctx context.Context, msg *messaging.Message) error {
 		log.Printf("  [桥接] %s → %s: %s",
-b.sourceName, b.targetName, string(msg.Payload))
+			b.sourceName, b.targetName, string(msg.Payload))
 
 		// 转发到目标 Provider
 		err := b.targetBus.Publisher().Publish(ctx, targetTopic, msg.Payload)

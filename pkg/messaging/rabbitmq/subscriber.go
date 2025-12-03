@@ -5,9 +5,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/FangcunMount/component-base/pkg/messaging"
 	amqp "github.com/rabbitmq/amqp091-go"
-
-	"github.com/FangcunMount/qs-server/pkg/messaging"
 )
 
 // subscriber RabbitMQ 订阅者实现

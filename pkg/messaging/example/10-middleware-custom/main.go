@@ -3,19 +3,19 @@
 package main
 
 import (
-"context"
-"crypto/md5"
-"encoding/json"
-"fmt"
-"log"
-"os"
-"os/signal"
-"sync"
-"syscall"
-"time"
+	"context"
+	"crypto/md5"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 
-"github.com/FangcunMount/qs-server/pkg/messaging"
-_ "github.com/FangcunMount/qs-server/pkg/messaging/nsq"
+	"github.com/FangcunMount/component-base/pkg/messaging"
+	_ "github.com/FangcunMount/component-base/pkg/messaging/nsq"
 )
 
 func main() {
@@ -96,11 +96,11 @@ func demonstrateAuth(bus messaging.EventBus, logger *log.Logger) {
 
 	// 使用认证中间件
 	router.AddHandlerWithMiddleware(
-"demo.auth",
-"auth-demo",
-handler,
-AuthMiddleware(secretKey),
-)
+		"demo.auth",
+		"auth-demo",
+		handler,
+		AuthMiddleware(secretKey),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -204,11 +204,11 @@ func demonstrateAudit(bus messaging.EventBus, logger *log.Logger) {
 
 	// 使用审计中间件
 	router.AddHandlerWithMiddleware(
-"demo.audit",
-"audit-demo",
-handler,
-AuditMiddleware(auditLog),
-)
+		"demo.audit",
+		"audit-demo",
+		handler,
+		AuditMiddleware(auditLog),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -254,11 +254,11 @@ AuditMiddleware(auditLog),
 func BatchMiddleware(batchSize int, batchTimeout time.Duration) messaging.Middleware {
 	return func(next messaging.Handler) messaging.Handler {
 		var (
-mu       sync.Mutex
-batch    []*messaging.Message
-timer    *time.Timer
-timerSet bool
-)
+			mu       sync.Mutex
+			batch    []*messaging.Message
+			timer    *time.Timer
+			timerSet bool
+		)
 
 		// 处理批次
 		processBatch := func() {
@@ -341,11 +341,11 @@ func demonstrateBatch(bus messaging.EventBus, logger *log.Logger) {
 
 	// 使用批处理中间件：每 5 条或每 2 秒触发一次
 	router.AddHandlerWithMiddleware(
-"demo.batch",
-"batch-demo",
-handler,
-BatchMiddleware(5, 2*time.Second),
-)
+		"demo.batch",
+		"batch-demo",
+		handler,
+		BatchMiddleware(5, 2*time.Second),
+	)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

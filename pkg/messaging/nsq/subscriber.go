@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/FangcunMount/qs-server/pkg/messaging"
+	"github.com/FangcunMount/component-base/pkg/messaging"
 	"github.com/nsqio/go-nsq"
 )
 

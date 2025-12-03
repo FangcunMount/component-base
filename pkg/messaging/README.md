@@ -118,7 +118,7 @@ Publisher.Publish() → Adapter 转换 → NSQ/RabbitMQ → 网络传输
 ### 安装
 
 ```bash
-go get github.com/FangcunMount/qs-server/pkg/messaging
+go get github.com/FangcunMount/component-base/pkg/messaging
 ```
 
 ### 5 分钟上手
@@ -130,8 +130,8 @@ import (
     "context"
     "log"
     
-    "github.com/FangcunMount/qs-server/pkg/messaging"
-    _ "github.com/FangcunMount/qs-server/pkg/messaging/nsq"
+    "github.com/FangcunMount/component-base/pkg/messaging"
+    _ "github.com/FangcunMount/component-base/pkg/messaging/nsq"
 )
 
 func main() {

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/FangcunMount/component-base/pkg/logger"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
@@ -25,6 +26,10 @@ type MongoConfig struct {
 	SSLAllowInvalidHostnames bool   `json:"ssl-allow-invalid-hostnames" mapstructure:"ssl-allow-invalid-hostnames"`
 	SSLCAFile                string `json:"ssl-ca-file" mapstructure:"ssl-ca-file"`
 	SSLPEMKeyfile            string `json:"ssl-pem-keyfile" mapstructure:"ssl-pem-keyfile"`
+
+	// 日志配置
+	EnableLogger  bool          `json:"enable-logger"  mapstructure:"enable-logger"`  // 是否启用日志
+	SlowThreshold time.Duration `json:"slow-threshold" mapstructure:"slow-threshold"` // 慢查询阈值
 }
 
 // BuildURL 根据配置参数构建 MongoDB 连接 URL
@@ -86,6 +91,19 @@ func (m *MongoDBConnection) Connect() error {
 	// 设置连接超时
 	clientOptions.SetConnectTimeout(5 * time.Second)
 	clientOptions.SetServerSelectionTimeout(5 * time.Second)
+
+	// 如果启用日志，添加日志钩子
+	if m.config.EnableLogger {
+		slowThreshold := m.config.SlowThreshold
+		if slowThreshold <= 0 {
+			slowThreshold = 200 * time.Millisecond // 默认 200ms
+		}
+
+		mongoHook := logger.NewMongoHook(true, slowThreshold)
+		clientOptions.SetMonitor(mongoHook.CommandMonitor())
+		clientOptions.SetPoolMonitor(mongoHook.PoolMonitor())
+		clientOptions.SetServerMonitor(mongoHook.ServerMonitor())
+	}
 
 	// 连接到MongoDB
 	client, err := mongo.Connect(ctx, clientOptions)

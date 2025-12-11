@@ -46,6 +46,39 @@ func L(ctx context.Context) *RequestLogger {
 	return NewRequestLogger(ctx)
 }
 
+// Default 返回默认的 RequestLogger（无上下文场景使用）
+// 适用场景：
+// - 程序启动初始化
+// - 后台任务/定时任务
+// - 独立的 goroutine
+// - 不在请求链路中的日志记录
+//
+// 示例：
+//
+//	logger.Default().Info("Application started")
+//	logger.Default().WithField("version", "1.0.0").Info("Service initialized")
+func Default() *RequestLogger {
+	return &RequestLogger{
+		fields: []log.Field{},
+	}
+}
+
+// New 创建一个带有自定义字段的 RequestLogger（无上下文场景使用）
+// 适用于需要预设一些固定字段的场景，如：
+// - 后台任务标识
+// - 模块名称
+// - 服务名称
+//
+// 示例：
+//
+//	taskLogger := logger.New(log.String("task", "data_sync"), log.String("module", "background"))
+//	taskLogger.Info("Task started")
+func New(fields ...log.Field) *RequestLogger {
+	return &RequestLogger{
+		fields: fields,
+	}
+}
+
 // WithFields 创建一个带有额外字段的新 Logger（不可变设计）
 func (l *RequestLogger) WithFields(fields ...log.Field) *RequestLogger {
 	newFields := make([]log.Field, 0, len(l.fields)+len(fields))

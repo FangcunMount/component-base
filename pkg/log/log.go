@@ -970,3 +970,28 @@ func RPCError(msg string, fields ...Field) {
 	allFields := append([]Field{String("type", "RPC")}, fields...)
 	std.zapLogger.Error(msg, allFields...)
 }
+
+// Mongo 记录 MongoDB 操作日志
+// 自动添加 type=MongoDB 字段
+func Mongo(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "MongoDB")}, fields...)
+	std.zapLogger.Info(msg, allFields...)
+}
+
+// MongoDebug 记录 MongoDB 操作的调试日志
+func MongoDebug(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "MongoDB")}, fields...)
+	std.zapLogger.Debug(msg, allFields...)
+}
+
+// MongoWarn 记录 MongoDB 操作的警告日志
+func MongoWarn(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "MongoDB")}, fields...)
+	std.zapLogger.Warn(msg, allFields...)
+}
+
+// MongoError 记录 MongoDB 操作的错误日志
+func MongoError(msg string, fields ...Field) {
+	allFields := append([]Field{String("type", "MongoDB")}, fields...)
+	std.zapLogger.Error(msg, allFields...)
+}

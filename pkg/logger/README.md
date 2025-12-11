@@ -88,6 +88,93 @@
 
 **核心思想**: 每个请求有独立的 Logger 实例，预设了追踪字段（trace_id, request_id 等）。
 
+#### 3.1.1 有 Context 场景（推荐）
+
+适用于请求链路中的日志记录，自动包含追踪信息。
+
+```go
+// L 从 context 获取 Logger（核心 API）
+// 如果 context 中没有 Logger，返回带追踪信息的默认 Logger
+func L(ctx context.Context) *RequestLogger
+
+// 使用示例
+func HandleRequest(ctx context.Context) {
+    logger.L(ctx).Info("Processing request", 
+        log.String("action", "create"),
+        log.String("resource", "user"),
+    )
+}
+```
+
+#### 3.1.2 无 Context 场景
+
+适用于程序启动、后台任务、定时任务等非请求链路场景。
+
+##### 方法 1: `Default()` - 最简单的方式
+
+```go
+// Default 返回默认的 RequestLogger（无上下文场景使用）
+func Default() *RequestLogger
+
+// 使用示例
+func main() {
+    // 程序启动日志
+    logger.Default().Info("Application started", 
+        log.String("version", "1.0.0"),
+        log.String("env", "production"),
+    )
+    
+    // 链式调用
+    appLogger := logger.Default().
+        WithField("app", "user-service").
+        WithField("instance", "server-01")
+    
+    appLogger.Info("Service initialized")
+}
+```
+
+##### 方法 2: `New(fields...)` - 预设字段
+
+```go
+// New 创建一个带有自定义字段的 RequestLogger
+func New(fields ...log.Field) *RequestLogger
+
+// 使用示例
+func StartBackgroundTask() {
+    // 后台任务日志
+    taskLogger := logger.New(
+        log.String("task", "data_sync"),
+        log.String("module", "background"),
+    )
+    
+    taskLogger.Info("Task started")
+    taskLogger.Info("Processing", log.Int("records", 1000))
+    taskLogger.Info("Task completed")
+}
+
+// 模块级别的 Logger（可作为全局变量）
+var dbLogger = logger.New(log.String("component", "database"))
+
+func InitDatabase() {
+    dbLogger.Info("Connection pool initialized", 
+        log.Int("max_connections", 100),
+    )
+}
+```
+
+#### 3.1.3 使用场景对比
+
+| 场景 | 推荐方法 | 示例 |
+|------|---------|------|
+| HTTP/gRPC 请求处理 | `logger.L(ctx)` | 请求链路中的业务逻辑 |
+| 程序启动 | `logger.Default()` | main 函数初始化 |
+| 后台任务/定时任务 | `logger.New(...)` | 独立的后台处理流程 |
+| 独立 goroutine | `logger.New(...)` | 无法传递 context 的异步任务 |
+| 模块/组件日志 | `logger.New(...)` | 全局 Logger 变量 |
+| 错误恢复 | `logger.Default()` | panic recover 等场景 |
+
+#### 3.1.4 完整示例
+
 ```go
 package logger
 
@@ -124,13 +211,22 @@ func WithLogger(ctx context.Context, logger *RequestLogger) context.Context {
     return context.WithValue(ctx, ctxLoggerKey{}, logger)
 }
 
-// L 从 context 获取 Logger（核心 API）
-// 如果 context 中没有 Logger，返回带追踪信息的默认 Logger
+// L 从 context 获取 Logger（有 context 场景）
 func L(ctx context.Context) *RequestLogger {
     if logger, ok := ctx.Value(ctxLoggerKey{}).(*RequestLogger); ok {
         return logger
     }
     return NewRequestLogger(ctx)
+}
+
+// Default 返回默认 Logger（无 context 场景）
+func Default() *RequestLogger {
+    return &RequestLogger{fields: []log.Field{}}
+}
+
+// New 创建带预设字段的 Logger（无 context 场景）
+func New(fields ...log.Field) *RequestLogger {
+    return &RequestLogger{fields: fields}
 }
 
 // WithFields 创建带额外字段的新 Logger（不可变设计）
@@ -755,6 +851,11 @@ internal/
     ├── logger/
     │   ├── context.go    # RequestLogger 核心实现
     │   ├── fields.go     # 标准字段定义
+    │   ├── gorm.go       # GORM 日志适配器
+    │   ├── redis.go      # Redis 日志钩子
+    │   ├── mongo.go      # MongoDB 日志钩子
+    │   ├── grpc.go       # gRPC 日志辅助
+    │   ├── http.go       # HTTP 日志辅助
     │   └── doc.go        # 包文档
     └── middleware/
         ├── api_logger.go          # HTTP 日志中间件
@@ -762,7 +863,116 @@ internal/
         └── grpc_logger.go         # gRPC 客户端日志拦截器
 ```
 
-### 7.2 依赖项
+### 7.2 数据库日志集成
+
+#### 7.2.1 GORM 日志集成
+
+```go
+import (
+    "github.com/FangcunMount/component-base/pkg/logger"
+    "gorm.io/driver/mysql"
+    "gorm.io/gorm"
+)
+
+// 创建 GORM Logger
+gormLogger := logger.NewGormLoggerWithConfig(logger.GormConfig{
+    SlowThreshold: 200 * time.Millisecond,  // 慢查询阈值
+    LogLevel:      logger.GormInfo,          // 日志级别
+    Colorful:      false,                    // 是否彩色输出
+})
+
+// 初始化数据库连接
+db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+    Logger: gormLogger,
+})
+```
+
+#### 7.2.2 Redis 日志集成
+
+```go
+import (
+    "github.com/FangcunMount/component-base/pkg/logger"
+    "github.com/redis/go-redis/v9"
+)
+
+// 创建 Redis Hook
+redisHook := logger.NewRedisHookWithConfig(logger.RedisHookConfig{
+    Enabled:       true,
+    SlowThreshold: 200 * time.Millisecond,  // 慢命令阈值
+})
+
+// 初始化 Redis 客户端
+rdb := redis.NewClient(&redis.Options{
+    Addr: "localhost:6379",
+})
+rdb.AddHook(redisHook)
+```
+
+#### 7.2.3 MongoDB 日志集成
+
+```go
+import (
+    "github.com/FangcunMount/component-base/pkg/logger"
+    "go.mongodb.org/mongo-driver/mongo"
+    "go.mongodb.org/mongo-driver/mongo/options"
+)
+
+// 创建 MongoDB Hook
+mongoHook := logger.NewMongoHookWithConfig(logger.MongoHookConfig{
+    Enabled:       true,
+    SlowThreshold: 200 * time.Millisecond,  // 慢查询阈值
+})
+
+// 配置 MongoDB 客户端
+clientOptions := options.Client().
+    ApplyURI("mongodb://localhost:27017").
+    SetMonitor(mongoHook.CommandMonitor()).      // 命令监控
+    SetPoolMonitor(mongoHook.PoolMonitor()).     // 连接池监控
+    SetServerMonitor(mongoHook.ServerMonitor())  // 服务器监控
+
+// 连接到 MongoDB
+client, err := mongo.Connect(ctx, clientOptions)
+```
+
+**日志示例**:
+
+```json
+{
+  "level": "debug",
+  "ts": "2025-12-11T10:30:45.123+08:00",
+  "type": "MongoDB",
+  "msg": "MongoDB command succeeded",
+  "request_id": 12345,
+  "database": "mydb",
+  "command": "find",
+  "connection_id": "localhost:27017[1]",
+  "elapsed_ms": 15.234,
+  "trace_id": "abc123",
+  "span_id": "def456"
+}
+```
+
+**慢查询日志**:
+
+```json
+{
+  "level": "warn",
+  "ts": "2025-12-11T10:30:45.456+08:00",
+  "type": "MongoDB",
+  "msg": "MongoDB slow command",
+  "request_id": 12346,
+  "database": "mydb",
+  "command": "aggregate",
+  "connection_id": "localhost:27017[1]",
+  "elapsed_ms": 350.678,
+  "event": "slow_command",
+  "slow_threshold": "200ms",
+  "trace_id": "abc124",
+  "span_id": "def457"
+}
+```
+
+### 7.3 依赖项
 
 ```go
 // go.mod
@@ -770,10 +980,13 @@ require (
     go.uber.org/zap v1.27.0
     github.com/gin-gonic/gin v1.10.0
     google.golang.org/grpc v1.68.0
+    gorm.io/gorm v1.25.0
+    github.com/redis/go-redis/v9 v9.0.0
+    go.mongodb.org/mongo-driver v1.12.0
 )
 ```
 
-### 7.3 初始化步骤
+### 7.4 初始化步骤
 
 1. **复制 logger 包** 到你的项目
 2. **复制中间件** 到你的项目

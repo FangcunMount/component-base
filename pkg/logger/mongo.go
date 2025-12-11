@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/FangcunMount/component-base/pkg/log"
@@ -16,13 +17,22 @@ import (
 type MongoHook struct {
 	enabled            bool
 	slowThreshold      time.Duration
-	logCommandDetail   bool          // 是否记录命令详情（默认 false，避免敏感信息泄露）
+	logCommandDetail   bool          // 是否记录命令详情（默认 true，类似 GORM 记录 SQL）
 	logReplyDetail     bool          // 是否记录响应详情（默认 false）
 	logHeartbeat       bool          // 是否记录心跳（默认 false，减少日志噪音）
 	logStarted         bool          // 是否记录命令开始（默认 false，只记录完成）
 	ignoredCommands    []string      // 忽略的命令列表（如心跳、握手等高频命令）
 	slowReadThreshold  time.Duration // 慢读命令阈值
 	slowWriteThreshold time.Duration // 慢写命令阈值
+	commandCache       sync.Map      // 缓存命令详情，key 为 requestID
+}
+
+// commandInfo 存储命令信息
+type commandInfo struct {
+	database   string
+	collection string
+	query      string
+	ctx        context.Context
 }
 
 // MongoHookConfig MongoDB 钩子配置
@@ -52,8 +62,8 @@ func DefaultMongoHookConfig() MongoHookConfig {
 	return MongoHookConfig{
 		Enabled:            true,
 		SlowThreshold:      200 * time.Millisecond,
-		LogCommandDetail:   false, // 默认不记录详情，避免敏感信息泄露
-		LogReplyDetail:     false, // 默认不记录响应详情
+		LogCommandDetail:   true,  // 默认记录查询详情（类似 GORM 的 SQL 日志），敏感信息会自动脱敏
+		LogReplyDetail:     false, // 默认不记录响应详情（避免返回大量数据）
 		LogHeartbeat:       false, // 默认不记录心跳，减少噪音
 		LogStarted:         false, // 默认不记录开始，减少日志量
 		IgnoredCommands:    []string{"hello", "isMaster", "ismaster", "ping", "saslStart", "saslContinue"},
@@ -73,7 +83,7 @@ func NewMongoHook(enabled bool, slowThreshold time.Duration) *MongoHook {
 	return &MongoHook{
 		enabled:            enabled,
 		slowThreshold:      slowThreshold,
-		logCommandDetail:   false,
+		logCommandDetail:   true, // 默认记录查询详情
 		logReplyDetail:     false,
 		logHeartbeat:       false,
 		logStarted:         false,
@@ -218,7 +228,20 @@ func (h *MongoHook) logCommandStarted(ctx context.Context, evt *event.CommandSta
 		return
 	}
 
-	// 默认不记录 started，减少日志量
+	// 缓存命令信息，供 succeeded 时使用
+	if h.logCommandDetail && evt.Command != nil {
+		collection := extractCollectionName(evt.Command, evt.CommandName)
+		safeCmd := sanitizeCommand(evt.Command, evt.CommandName)
+
+		h.commandCache.Store(evt.RequestID, &commandInfo{
+			database:   evt.DatabaseName,
+			collection: collection,
+			query:      safeCmd,
+			ctx:        ctx,
+		})
+	}
+
+	// 如果不记录 started，直接返回
 	if !h.logStarted {
 		return
 	}
@@ -238,10 +261,10 @@ func (h *MongoHook) logCommandStarted(ctx context.Context, evt *event.CommandSta
 	// 添加分布式追踪字段
 	fields = append(fields, log.TraceFields(ctx)...)
 
-	// 仅在显式开启时记录命令详情（避免敏感信息泄露）
+	// 记录命令详情（类似 GORM 记录 SQL 语句）
 	if h.logCommandDetail && evt.Command != nil {
 		safeCmd := sanitizeCommand(evt.Command, evt.CommandName)
-		fields = append(fields, log.String("command_detail", safeCmd))
+		fields = append(fields, log.String("query", safeCmd))
 	}
 
 	log.MongoDebug("MongoDB command started", fields...)
@@ -264,8 +287,27 @@ func (h *MongoHook) logCommandSucceeded(ctx context.Context, evt *event.CommandS
 		log.Float64("elapsed_ms", float64(elapsed.Nanoseconds())/1e6),
 	}
 
-	// 添加分布式追踪字段
-	fields = append(fields, log.TraceFields(ctx)...)
+	// 从缓存中获取命令信息
+	if cached, ok := h.commandCache.LoadAndDelete(evt.RequestID); ok {
+		if info, ok := cached.(*commandInfo); ok {
+			// 添加数据库和集合信息
+			fields = append(fields, log.String("database", info.database))
+			if info.collection != "" {
+				fields = append(fields, log.String("collection", info.collection))
+			}
+
+			// 添加查询语句（类似 GORM 记录 SQL）
+			if info.query != "" {
+				fields = append(fields, log.String("query", info.query))
+			}
+
+			// 使用原始 context 获取追踪信息
+			fields = append(fields, log.TraceFields(info.ctx)...)
+		}
+	} else {
+		// 如果没有缓存，使用当前 context
+		fields = append(fields, log.TraceFields(ctx)...)
+	}
 
 	// 仅在显式开启且慢查询时记录响应详情（避免敏感信息泄露）
 	if h.logReplyDetail && elapsed > slowThreshold && evt.Reply != nil {
@@ -296,8 +338,27 @@ func (h *MongoHook) logCommandFailed(ctx context.Context, evt *event.CommandFail
 		log.String("error", evt.Failure),
 	}
 
-	// 添加分布式追踪字段
-	fields = append(fields, log.TraceFields(ctx)...)
+	// 从缓存中获取命令信息
+	if cached, ok := h.commandCache.LoadAndDelete(evt.RequestID); ok {
+		if info, ok := cached.(*commandInfo); ok {
+			// 添加数据库和集合信息
+			fields = append(fields, log.String("database", info.database))
+			if info.collection != "" {
+				fields = append(fields, log.String("collection", info.collection))
+			}
+
+			// 添加查询语句
+			if info.query != "" {
+				fields = append(fields, log.String("query", info.query))
+			}
+
+			// 使用原始 context 获取追踪信息
+			fields = append(fields, log.TraceFields(info.ctx)...)
+		}
+	} else {
+		// 如果没有缓存，使用当前 context
+		fields = append(fields, log.TraceFields(ctx)...)
+	}
 
 	log.MongoError("MongoDB command failed", fields...)
 }

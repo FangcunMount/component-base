@@ -468,6 +468,9 @@ config := &messaging.Config{
         MsgTimeout:   time.Minute, // 消息超时
     },
 }
+
+// 提示：订阅时会按 MaxInFlight 启动同等数量的并发处理协程，
+// 确保该值与预期的 consumer 并发度匹配。
 ```
 
 ### RabbitMQ 配置

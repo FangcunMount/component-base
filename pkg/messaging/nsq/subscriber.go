@@ -53,8 +53,14 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 		return fmt.Errorf("failed to create NSQ consumer: %w", err)
 	}
 
-	// 添加消息处理器
-	consumer.AddHandler(nsq.HandlerFunc(func(message *nsq.Message) error {
+	// 并发度与 MaxInFlight 保持一致，确保可以并行处理消息
+	concurrency := s.config.MaxInFlight
+	if concurrency < 1 {
+		concurrency = 1
+	}
+
+	// 添加消息处理器（并发）
+	consumer.AddConcurrentHandlers(nsq.HandlerFunc(func(message *nsq.Message) error {
 		// 将 NSQ 的 Message 转换为领域层的 Message
 		domainMsg := &messaging.Message{
 			UUID:      string(message.ID[:]),
@@ -89,7 +95,7 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 		// 处理成功，自动 Ack
 		domainMsg.Ack()
 		return nil
-	}))
+	}), concurrency)
 
 	// 连接到 NSQLookupd
 	if err := consumer.ConnectToNSQLookupds(s.lookupd); err != nil {

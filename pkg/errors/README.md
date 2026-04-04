@@ -98,11 +98,11 @@ if coder != nil {
 }
 ```
 
-适配于 `github.com/marmotedu/errors` 错误包的错误码实现。
+适配于 `github.com/FangcunMount/component-base/errors` 错误包的错误码实现。
 
 #### Code 设计规范
 
-Code 代码从 100101 开始，1000 以下为 `github.com/marmotedu/errors` 保留 code.
+Code 代码从 100101 开始，1000 以下为 `github.com/FangcunMount/component-base/errors` 保留 code.
 
 错误代码说明：100101
 

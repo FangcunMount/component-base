@@ -1,1 +1,1 @@
-package shutdown // import "github.com/marmotedu/iam/pkg/shutdown"
+package shutdown // import "github.com/FangcunMount/component-base/pkg/shutdown"

@@ -13,16 +13,16 @@ We decided to use the same callback pattern in case of handling POSIX signals.
 ## Installation
 
 ```
-go get github.com/marmotedu/iam/pkg/shutdown
+go get github.com/FangcunMount/component-base/pkg/shutdown
 ```
 
 ## Documentation
 
-`github.com/marmotedu/iam/pkg/shutdown` documentation is available on [godoc](http://godoc.org/github.com/marmotedu/iam/pkg/shutdown).
+`github.com/FangcunMount/component-base/pkg/shutdown` documentation is available on [godoc](http://godoc.org/github.com/FangcunMount/component-base/pkg/shutdown).
 
 Both `ShutdownManagers` are also documented:
-- [`PosixSignalManager`](http://godoc.org/github.com/marmotedu/iam/pkg/shutdown/shutdownmanagers/posixsignal)
-- [`AwsManager`](http://godoc.org/github.com/marmotedu/iam/pkg/shutdown/shutdownmanagers/awsmanager)
+- [`PosixSignalManager`](http://godoc.org/github.com/FangcunMount/component-base/pkg/shutdown/shutdownmanagers/posixsignal)
+- [`AwsManager`](http://godoc.org/github.com/FangcunMount/component-base/pkg/shutdown/shutdownmanagers/awsmanager)
 
 
 ## Example - AWS Autoscale, Scale-in Event
@@ -38,9 +38,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/marmotedu/iam/pkg/shutdown"
-	"github.com/marmotedu/iam/pkg/shutdown/shutdownmanagers/awsmanager"
-	"github.com/marmotedu/iam/pkg/shutdown/shutdownmanagers/posixsignal"
+	"github.com/FangcunMount/component-base/pkg/shutdown"
+	"github.com/FangcunMount/component-base/pkg/shutdown/shutdownmanagers/awsmanager"
+	"github.com/FangcunMount/component-base/pkg/shutdown/shutdownmanagers/posixsignal"
 )
 
 func main() {
@@ -95,8 +95,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/marmotedu/iam/pkg/shutdown"
-	"github.com/marmotedu/iam/pkg/shutdown/shutdownmanagers/posixsignal"
+	"github.com/FangcunMount/component-base/pkg/shutdown"
+	"github.com/FangcunMount/component-base/pkg/shutdown/shutdownmanagers/posixsignal"
 )
 
 func main() {
@@ -137,8 +137,8 @@ import (
 	"time"
 	"errors"
 
-	"github.com/marmotedu/iam/pkg/shutdown"
-	"github.com/marmotedu/iam/pkg/shutdown/shutdownmanagers/posixsignal"
+	"github.com/FangcunMount/component-base/pkg/shutdown"
+	"github.com/FangcunMount/component-base/pkg/shutdown/shutdownmanagers/posixsignal"
 )
 
 func main() {

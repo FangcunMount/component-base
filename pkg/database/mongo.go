@@ -15,11 +15,17 @@ import (
 
 // MongoConfig MongoDB 数据库配置
 type MongoConfig struct {
+	// 显式连接 URI（优先级最高）
+	URL string `json:"url,omitempty" mapstructure:"url"`
+
 	// 分离的连接参数（推荐使用，便于通过环境变量配置）
 	Host     string `json:"host,omitempty"     mapstructure:"host"`     // 主机地址，格式: host:port
 	Username string `json:"username,omitempty" mapstructure:"username"` // 用户名
 	Password string `json:"-"                  mapstructure:"password"` // 密码（不输出到JSON）
 	Database string `json:"database,omitempty" mapstructure:"database"` // 数据库名
+
+	ReplicaSet       string `json:"replica-set,omitempty" mapstructure:"replica-set"`
+	DirectConnection bool   `json:"direct-connection,omitempty" mapstructure:"direct-connection"`
 
 	UseSSL                   bool   `json:"use-ssl" mapstructure:"use-ssl"`
 	SSLInsecureSkipVerify    bool   `json:"ssl-insecure-skip-verify" mapstructure:"ssl-insecure-skip-verify"`
@@ -30,33 +36,58 @@ type MongoConfig struct {
 	// 日志配置
 	EnableLogger  bool          `json:"enable-logger"  mapstructure:"enable-logger"`  // 是否启用日志
 	SlowThreshold time.Duration `json:"slow-threshold" mapstructure:"slow-threshold"` // 慢查询阈值
+	// 详细日志配置
+	LogCommandDetail bool `json:"log-command-detail" mapstructure:"log-command-detail"`
+	LogReplyDetail   bool `json:"log-reply-detail"   mapstructure:"log-reply-detail"`
+	LogStarted       bool `json:"log-started"        mapstructure:"log-started"`
 }
 
 // BuildURL 根据配置参数构建 MongoDB 连接 URL
 func (c *MongoConfig) BuildURL() string {
-	// 构建基础 URL
-	scheme := "mongodb"
-	if c.UseSSL {
-		scheme = "mongodb+srv"
+	if c == nil {
+		return ""
+	}
+	if c.URL != "" {
+		return c.URL
+	}
+	if c.Host == "" {
+		return ""
 	}
 
-	// 构建认证信息
-	var userInfo string
+	u := &url.URL{
+		Scheme: "mongodb",
+		Host:   c.Host,
+	}
+	if c.Database != "" {
+		u.Path = "/" + c.Database
+	}
 	if c.Username != "" {
 		if c.Password != "" {
-			userInfo = fmt.Sprintf("%s:%s@", url.QueryEscape(c.Username), url.QueryEscape(c.Password))
+			u.User = url.UserPassword(c.Username, c.Password)
 		} else {
-			userInfo = fmt.Sprintf("%s@", url.QueryEscape(c.Username))
+			u.User = url.User(c.Username)
 		}
 	}
 
-	// 构建数据库路径
-	dbPath := ""
-	if c.Database != "" {
-		dbPath = "/" + c.Database
+	q := u.Query()
+	if c.ReplicaSet != "" {
+		q.Set("replicaSet", c.ReplicaSet)
 	}
+	if c.DirectConnection {
+		q.Set("directConnection", "true")
+	}
+	if c.UseSSL {
+		q.Set("tls", "true")
+	}
+	if c.SSLInsecureSkipVerify {
+		q.Set("tlsInsecure", "true")
+	}
+	if c.SSLAllowInvalidHostnames {
+		q.Set("tlsAllowInvalidHostnames", "true")
+	}
+	u.RawQuery = q.Encode()
 
-	return fmt.Sprintf("%s://%s%s%s", scheme, userInfo, c.Host, dbPath)
+	return u.String()
 }
 
 // MongoDBConnection MongoDB 连接实现
@@ -99,7 +130,13 @@ func (m *MongoDBConnection) Connect() error {
 			slowThreshold = 200 * time.Millisecond // 默认 200ms
 		}
 
-		mongoHook := logger.NewMongoHook(true, slowThreshold)
+		mongoHook := logger.NewMongoHookWithConfig(logger.MongoHookConfig{
+			Enabled:          true,
+			SlowThreshold:    slowThreshold,
+			LogCommandDetail: m.config.LogCommandDetail,
+			LogReplyDetail:   m.config.LogReplyDetail,
+			LogStarted:       m.config.LogStarted,
+		})
 		clientOptions.SetMonitor(mongoHook.CommandMonitor())
 		clientOptions.SetPoolMonitor(mongoHook.PoolMonitor())
 		clientOptions.SetServerMonitor(mongoHook.ServerMonitor())

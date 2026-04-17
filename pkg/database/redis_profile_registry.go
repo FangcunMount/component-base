@@ -8,10 +8,29 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
+type RedisProfileState string
+
+const (
+	RedisProfileStateMissing     RedisProfileState = "missing"
+	RedisProfileStateAvailable   RedisProfileState = "available"
+	RedisProfileStateUnavailable RedisProfileState = "unavailable"
+)
+
+type RedisProfileStatus struct {
+	Name  string
+	State RedisProfileState
+	Err   error
+}
+
+type namedRedisProfile struct {
+	conn    *RedisConnection
+	lastErr error
+}
+
 // NamedRedisRegistry manages a default Redis connection plus optional named profiles.
 type NamedRedisRegistry struct {
 	defaultConn *RedisConnection
-	profiles    map[string]*RedisConnection
+	profiles    map[string]*namedRedisProfile
 	mutex       sync.RWMutex
 }
 
@@ -19,7 +38,7 @@ type NamedRedisRegistry struct {
 // and a set of optional named profile configs.
 func NewNamedRedisRegistry(defaultConfig *RedisConfig, profiles map[string]*RedisConfig) *NamedRedisRegistry {
 	r := &NamedRedisRegistry{
-		profiles: make(map[string]*RedisConnection),
+		profiles: make(map[string]*namedRedisProfile),
 	}
 	if defaultConfig != nil {
 		r.defaultConn = NewRedisConnection(cloneRedisConfig(defaultConfig))
@@ -28,7 +47,9 @@ func NewNamedRedisRegistry(defaultConfig *RedisConfig, profiles map[string]*Redi
 		if name == "" || cfg == nil {
 			continue
 		}
-		r.profiles[name] = NewRedisConnection(cloneRedisConfig(cfg))
+		r.profiles[name] = &namedRedisProfile{
+			conn: NewRedisConnection(cloneRedisConfig(cfg)),
+		}
 	}
 	return r
 }
@@ -51,9 +72,9 @@ func (r *NamedRedisRegistry) Connect() error {
 
 	r.mutex.RLock()
 	defaultConn := r.defaultConn
-	profiles := make(map[string]*RedisConnection, len(r.profiles))
-	for name, conn := range r.profiles {
-		profiles[name] = conn
+	profiles := make(map[string]*namedRedisProfile, len(r.profiles))
+	for name, profile := range r.profiles {
+		profiles[name] = profile
 	}
 	r.mutex.RUnlock()
 
@@ -62,10 +83,23 @@ func (r *NamedRedisRegistry) Connect() error {
 			return fmt.Errorf("connect default redis: %w", err)
 		}
 	}
-	for name, conn := range profiles {
-		if err := conn.Connect(); err != nil {
-			return fmt.Errorf("connect redis profile %q: %w", name, err)
+	for name, profile := range profiles {
+		if profile == nil || profile.conn == nil {
+			continue
 		}
+		if err := profile.conn.Connect(); err != nil {
+			r.mutex.Lock()
+			if current := r.profiles[name]; current != nil {
+				current.lastErr = fmt.Errorf("connect redis profile %q: %w", name, err)
+			}
+			r.mutex.Unlock()
+			continue
+		}
+		r.mutex.Lock()
+		if current := r.profiles[name]; current != nil {
+			current.lastErr = nil
+		}
+		r.mutex.Unlock()
 	}
 	return nil
 }
@@ -78,9 +112,9 @@ func (r *NamedRedisRegistry) Close() error {
 
 	r.mutex.RLock()
 	defaultConn := r.defaultConn
-	profiles := make(map[string]*RedisConnection, len(r.profiles))
-	for name, conn := range r.profiles {
-		profiles[name] = conn
+	profiles := make(map[string]*namedRedisProfile, len(r.profiles))
+	for name, profile := range r.profiles {
+		profiles[name] = profile
 	}
 	r.mutex.RUnlock()
 
@@ -90,8 +124,11 @@ func (r *NamedRedisRegistry) Close() error {
 			lastErr = fmt.Errorf("close default redis: %w", err)
 		}
 	}
-	for name, conn := range profiles {
-		if err := conn.Close(); err != nil {
+	for name, profile := range profiles {
+		if profile == nil || profile.conn == nil {
+			continue
+		}
+		if err := profile.conn.Close(); err != nil {
 			lastErr = fmt.Errorf("close redis profile %q: %w", name, err)
 		}
 	}
@@ -106,9 +143,9 @@ func (r *NamedRedisRegistry) HealthCheck(ctx context.Context) error {
 
 	r.mutex.RLock()
 	defaultConn := r.defaultConn
-	profiles := make(map[string]*RedisConnection, len(r.profiles))
-	for name, conn := range r.profiles {
-		profiles[name] = conn
+	profiles := make(map[string]*namedRedisProfile, len(r.profiles))
+	for name, profile := range r.profiles {
+		profiles[name] = profile
 	}
 	r.mutex.RUnlock()
 
@@ -117,15 +154,70 @@ func (r *NamedRedisRegistry) HealthCheck(ctx context.Context) error {
 			return fmt.Errorf("health check default redis: %w", err)
 		}
 	}
-	for name, conn := range profiles {
-		if err := conn.HealthCheck(ctx); err != nil {
-			return fmt.Errorf("health check redis profile %q: %w", name, err)
+	for name, profile := range profiles {
+		if profile == nil || profile.conn == nil || profile.lastErr != nil {
+			continue
+		}
+		if err := profile.conn.HealthCheck(ctx); err != nil {
+			r.mutex.Lock()
+			if current := r.profiles[name]; current != nil {
+				current.lastErr = fmt.Errorf("health check redis profile %q: %w", name, err)
+			}
+			r.mutex.Unlock()
 		}
 	}
 	return nil
 }
 
-// GetConnection returns the named profile connection, falling back to default.
+// ProfileStatus reports whether a named profile is missing, available, or unavailable.
+func (r *NamedRedisRegistry) ProfileStatus(name string) RedisProfileStatus {
+	status := RedisProfileStatus{Name: name, State: RedisProfileStateMissing}
+	if r == nil || name == "" {
+		return status
+	}
+
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	profile, ok := r.profiles[name]
+	if !ok || profile == nil {
+		return status
+	}
+	if profile.lastErr != nil {
+		return RedisProfileStatus{
+			Name:  name,
+			State: RedisProfileStateUnavailable,
+			Err:   profile.lastErr,
+		}
+	}
+	return RedisProfileStatus{
+		Name:  name,
+		State: RedisProfileStateAvailable,
+	}
+}
+
+// ProfileStatuses returns the current status of every configured named profile.
+func (r *NamedRedisRegistry) ProfileStatuses() map[string]RedisProfileStatus {
+	if r == nil {
+		return nil
+	}
+
+	r.mutex.RLock()
+	names := make([]string, 0, len(r.profiles))
+	for name := range r.profiles {
+		names = append(names, name)
+	}
+	r.mutex.RUnlock()
+
+	statuses := make(map[string]RedisProfileStatus, len(names))
+	for _, name := range names {
+		statuses[name] = r.ProfileStatus(name)
+	}
+	return statuses
+}
+
+// GetConnection returns the named profile connection. Missing profiles fall back to default,
+// while configured-but-unavailable profiles return an error.
 func (r *NamedRedisRegistry) GetConnection(name string) (*RedisConnection, error) {
 	if r == nil {
 		return nil, fmt.Errorf("redis registry is nil")
@@ -135,8 +227,14 @@ func (r *NamedRedisRegistry) GetConnection(name string) (*RedisConnection, error
 	defer r.mutex.RUnlock()
 
 	if name != "" {
-		if conn, ok := r.profiles[name]; ok && conn != nil {
-			return conn, nil
+		if profile, ok := r.profiles[name]; ok {
+			if profile == nil || profile.conn == nil {
+				return nil, fmt.Errorf("redis profile %q is unavailable", name)
+			}
+			if profile.lastErr != nil {
+				return nil, fmt.Errorf("redis profile %q is unavailable: %w", name, profile.lastErr)
+			}
+			return profile.conn, nil
 		}
 	}
 	if r.defaultConn != nil {
@@ -145,7 +243,8 @@ func (r *NamedRedisRegistry) GetConnection(name string) (*RedisConnection, error
 	return nil, fmt.Errorf("redis connection for profile %q not found", name)
 }
 
-// GetClient returns the named profile Redis client, falling back to default.
+// GetClient returns the named profile Redis client. Missing profiles fall back to default,
+// while configured-but-unavailable profiles return an error.
 func (r *NamedRedisRegistry) GetClient(name string) (goredis.UniversalClient, error) {
 	conn, err := r.GetConnection(name)
 	if err != nil {

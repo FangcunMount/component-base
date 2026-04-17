@@ -46,6 +46,10 @@ func TestNamedRedisRegistryFallsBackToDefault(t *testing.T) {
 	if got, err := queryClient.Get(context.Background(), "default:key").Result(); err != nil || got != "1" {
 		t.Fatalf("fallback client should read default db key, got value=%q err=%v", got, err)
 	}
+
+	if status := registry.ProfileStatus("query_cache"); status.State != RedisProfileStateMissing {
+		t.Fatalf("query_cache profile state = %q, want missing", status.State)
+	}
 }
 
 func TestNamedRedisRegistryUsesNamedProfiles(t *testing.T) {
@@ -110,6 +114,67 @@ func TestNamedRedisRegistryUsesNamedProfiles(t *testing.T) {
 	}
 
 	if err := registry.HealthCheck(ctx); err != nil {
+		t.Fatalf("HealthCheck() error = %v", err)
+	}
+
+	if status := registry.ProfileStatus("static_cache"); status.State != RedisProfileStateAvailable {
+		t.Fatalf("static_cache profile state = %q, want available", status.State)
+	}
+	if status := registry.ProfileStatus("query_cache"); status.State != RedisProfileStateAvailable {
+		t.Fatalf("query_cache profile state = %q, want available", status.State)
+	}
+}
+
+func TestNamedRedisRegistryMarksUnavailableProfilesWithoutBreakingDefault(t *testing.T) {
+	mr := miniredis.RunT(t)
+
+	host, port := splitMiniredisAddr(t, mr.Addr())
+	registry := NewNamedRedisRegistry(&RedisConfig{
+		Host: host,
+		Port: port,
+	}, map[string]*RedisConfig{
+		"static_cache": {
+			Host: host,
+			Port: 63999,
+		},
+	})
+
+	if err := registry.Connect(); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = registry.Close()
+	})
+
+	status := registry.ProfileStatus("static_cache")
+	if status.State != RedisProfileStateUnavailable {
+		t.Fatalf("static_cache profile state = %q, want unavailable", status.State)
+	}
+	if status.Err == nil {
+		t.Fatalf("static_cache profile should retain connect error")
+	}
+
+	if _, err := registry.GetClient("static_cache"); err == nil {
+		t.Fatalf("GetClient(static_cache) unexpectedly succeeded")
+	}
+
+	defaultClient, err := registry.GetClient("")
+	if err != nil {
+		t.Fatalf("GetClient(default) error = %v", err)
+	}
+	if err := defaultClient.Set(context.Background(), "default:key", "1", 0).Err(); err != nil {
+		t.Fatalf("set default key failed: %v", err)
+	}
+
+	queryClient, err := registry.GetClient("query_cache")
+	if err != nil {
+		t.Fatalf("GetClient(query_cache) error = %v", err)
+	}
+	if got, err := queryClient.Get(context.Background(), "default:key").Result(); err != nil || got != "1" {
+		t.Fatalf("fallback client should read default db key, got value=%q err=%v", got, err)
+	}
+
+	if err := registry.HealthCheck(context.Background()); err != nil {
 		t.Fatalf("HealthCheck() error = %v", err)
 	}
 }

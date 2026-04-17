@@ -21,6 +21,9 @@ func TestNormalizeNamespace(t *testing.T) {
 	if got := NewKeyspace("").Prefix("stats:key"); got != "stats:key" {
 		t.Fatalf("Prefix() without namespace = %q, want %q", got, "stats:key")
 	}
+	if got := NewKeyspace("prod").Child("cache:query").Prefix("stats:query:system:1"); got != "prod:cache:query:stats:query:system:1" {
+		t.Fatalf("Child().Prefix() = %q, want %q", got, "prod:cache:query:stats:query:system:1")
+	}
 }
 
 func TestJitterTTL(t *testing.T) {

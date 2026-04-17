@@ -17,6 +17,19 @@ func NewKeyspace(namespace string) Keyspace {
 	return Keyspace{Namespace: NormalizeNamespace(namespace)}
 }
 
+// Child returns a nested keyspace under the current namespace.
+func (k Keyspace) Child(child string) Keyspace {
+	child = NormalizeNamespace(child)
+	switch {
+	case k.Namespace == "":
+		return NewKeyspace(child)
+	case child == "":
+		return NewKeyspace(k.Namespace)
+	default:
+		return NewKeyspace(k.Namespace + ":" + child)
+	}
+}
+
 // Prefix returns the key with namespace applied when configured.
 func (k Keyspace) Prefix(key string) string {
 	if k.Namespace == "" {

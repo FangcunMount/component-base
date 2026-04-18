@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -17,15 +18,23 @@ const (
 )
 
 type RedisProfileStatus struct {
-	Name  string
-	State RedisProfileState
-	Err   error
+	Name        string
+	State       RedisProfileState
+	Err         error
+	NextRetryAt time.Time
 }
 
 type namedRedisProfile struct {
-	conn    *RedisConnection
-	lastErr error
+	conn        *RedisConnection
+	lastErr     error
+	nextRetryAt time.Time
+	retryDelay  time.Duration
 }
+
+const (
+	redisProfileInitialRetryDelay = 30 * time.Second
+	redisProfileMaxRetryDelay     = 5 * time.Minute
+)
 
 // NamedRedisRegistry manages a default Redis connection plus optional named profiles.
 type NamedRedisRegistry struct {
@@ -90,14 +99,14 @@ func (r *NamedRedisRegistry) Connect() error {
 		if err := profile.conn.Connect(); err != nil {
 			r.mutex.Lock()
 			if current := r.profiles[name]; current != nil {
-				current.lastErr = fmt.Errorf("connect redis profile %q: %w", name, err)
+				current.markUnavailable(fmt.Errorf("connect redis profile %q: %w", name, err))
 			}
 			r.mutex.Unlock()
 			continue
 		}
 		r.mutex.Lock()
 		if current := r.profiles[name]; current != nil {
-			current.lastErr = nil
+			current.markAvailable()
 		}
 		r.mutex.Unlock()
 	}
@@ -155,13 +164,32 @@ func (r *NamedRedisRegistry) HealthCheck(ctx context.Context) error {
 		}
 	}
 	for name, profile := range profiles {
-		if profile == nil || profile.conn == nil || profile.lastErr != nil {
+		if profile == nil || profile.conn == nil {
+			continue
+		}
+		if profile.lastErr != nil {
+			if !profile.retryDue(time.Now()) {
+				continue
+			}
+			if err := profile.reconnect(); err != nil {
+				r.mutex.Lock()
+				if current := r.profiles[name]; current != nil {
+					current.markUnavailable(fmt.Errorf("reconnect redis profile %q: %w", name, err))
+				}
+				r.mutex.Unlock()
+				continue
+			}
+			r.mutex.Lock()
+			if current := r.profiles[name]; current != nil {
+				current.markAvailable()
+			}
+			r.mutex.Unlock()
 			continue
 		}
 		if err := profile.conn.HealthCheck(ctx); err != nil {
 			r.mutex.Lock()
 			if current := r.profiles[name]; current != nil {
-				current.lastErr = fmt.Errorf("health check redis profile %q: %w", name, err)
+				current.markUnavailable(fmt.Errorf("health check redis profile %q: %w", name, err))
 			}
 			r.mutex.Unlock()
 		}
@@ -185,9 +213,10 @@ func (r *NamedRedisRegistry) ProfileStatus(name string) RedisProfileStatus {
 	}
 	if profile.lastErr != nil {
 		return RedisProfileStatus{
-			Name:  name,
-			State: RedisProfileStateUnavailable,
-			Err:   profile.lastErr,
+			Name:        name,
+			State:       RedisProfileStateUnavailable,
+			Err:         profile.lastErr,
+			NextRetryAt: profile.nextRetryAt,
 		}
 	}
 	return RedisProfileStatus{
@@ -266,4 +295,47 @@ func cloneRedisConfig(cfg *RedisConfig) *RedisConfig {
 		copyCfg.Addrs = append([]string(nil), cfg.Addrs...)
 	}
 	return &copyCfg
+}
+
+func (p *namedRedisProfile) markAvailable() {
+	if p == nil {
+		return
+	}
+	p.lastErr = nil
+	p.nextRetryAt = time.Time{}
+	p.retryDelay = 0
+}
+
+func (p *namedRedisProfile) markUnavailable(err error) {
+	if p == nil {
+		return
+	}
+	p.lastErr = err
+	if p.retryDelay <= 0 {
+		p.retryDelay = redisProfileInitialRetryDelay
+	} else {
+		p.retryDelay *= 2
+		if p.retryDelay > redisProfileMaxRetryDelay {
+			p.retryDelay = redisProfileMaxRetryDelay
+		}
+	}
+	p.nextRetryAt = time.Now().Add(p.retryDelay)
+}
+
+func (p *namedRedisProfile) retryDue(now time.Time) bool {
+	if p == nil || p.lastErr == nil {
+		return false
+	}
+	if p.nextRetryAt.IsZero() {
+		return true
+	}
+	return !now.Before(p.nextRetryAt)
+}
+
+func (p *namedRedisProfile) reconnect() error {
+	if p == nil || p.conn == nil {
+		return fmt.Errorf("redis profile connection is nil")
+	}
+	_ = p.conn.Close()
+	return p.conn.Connect()
 }

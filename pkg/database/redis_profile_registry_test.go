@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 )
@@ -153,6 +154,9 @@ func TestNamedRedisRegistryMarksUnavailableProfilesWithoutBreakingDefault(t *tes
 	if status.Err == nil {
 		t.Fatalf("static_cache profile should retain connect error")
 	}
+	if status.NextRetryAt.IsZero() {
+		t.Fatalf("static_cache profile should publish next retry time")
+	}
 
 	if _, err := registry.GetClient("static_cache"); err == nil {
 		t.Fatalf("GetClient(static_cache) unexpectedly succeeded")
@@ -176,6 +180,52 @@ func TestNamedRedisRegistryMarksUnavailableProfilesWithoutBreakingDefault(t *tes
 
 	if err := registry.HealthCheck(context.Background()); err != nil {
 		t.Fatalf("HealthCheck() error = %v", err)
+	}
+}
+
+func TestNamedRedisRegistryRecoversUnavailableProfileOnHealthCheck(t *testing.T) {
+	host := "127.0.0.1"
+	registry := NewNamedRedisRegistry(nil, map[string]*RedisConfig{
+		"static_cache": {
+			Host: host,
+			Port: 63999,
+		},
+	})
+
+	if err := registry.Connect(); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = registry.Close()
+	})
+
+	status := registry.ProfileStatus("static_cache")
+	if status.State != RedisProfileStateUnavailable {
+		t.Fatalf("static_cache profile state = %q, want unavailable", status.State)
+	}
+
+	mr := miniredis.RunT(t)
+	realHost, realPort := splitMiniredisAddr(t, mr.Addr())
+	profile := registry.profiles["static_cache"]
+	profile.conn.config.Host = realHost
+	profile.conn.config.Port = realPort
+	profile.nextRetryAt = time.Now().Add(-time.Second)
+
+	if err := registry.HealthCheck(context.Background()); err != nil {
+		t.Fatalf("HealthCheck() error = %v", err)
+	}
+
+	status = registry.ProfileStatus("static_cache")
+	if status.State != RedisProfileStateAvailable {
+		t.Fatalf("static_cache profile state after recovery = %q, want available", status.State)
+	}
+
+	client, err := registry.GetClient("static_cache")
+	if err != nil {
+		t.Fatalf("GetClient(static_cache) error = %v", err)
+	}
+	if err := client.Set(context.Background(), "recover:key", "ok", 0).Err(); err != nil {
+		t.Fatalf("set recovered key failed: %v", err)
 	}
 }
 

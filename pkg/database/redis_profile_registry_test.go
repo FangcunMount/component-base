@@ -126,6 +126,53 @@ func TestNamedRedisRegistryUsesNamedProfiles(t *testing.T) {
 	}
 }
 
+func TestNamedRedisRegistryInheritsDefaultConnectionSettingsForNamedProfiles(t *testing.T) {
+	mr := miniredis.RunT(t)
+
+	host, port := splitMiniredisAddr(t, mr.Addr())
+	registry := NewNamedRedisRegistry(&RedisConfig{
+		Host:         host,
+		Port:         port,
+		MaxActive:    16,
+		MaxIdle:      8,
+		MinIdleConns: 2,
+	}, map[string]*RedisConfig{
+		"query_cache": {
+			Database: 3,
+		},
+	})
+
+	if err := registry.Connect(); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = registry.Close()
+	})
+
+	profile := registry.profiles["query_cache"]
+	if profile == nil || profile.conn == nil || profile.conn.config == nil {
+		t.Fatalf("query_cache profile connection not initialized")
+	}
+	if profile.conn.config.Host != host {
+		t.Fatalf("query_cache host = %q, want %q", profile.conn.config.Host, host)
+	}
+	if profile.conn.config.Port != port {
+		t.Fatalf("query_cache port = %d, want %d", profile.conn.config.Port, port)
+	}
+	if profile.conn.config.Database != 3 {
+		t.Fatalf("query_cache database = %d, want 3", profile.conn.config.Database)
+	}
+	if profile.conn.config.MaxActive != 16 {
+		t.Fatalf("query_cache max active = %d, want 16", profile.conn.config.MaxActive)
+	}
+	if profile.conn.config.MaxIdle != 8 {
+		t.Fatalf("query_cache max idle = %d, want 8", profile.conn.config.MaxIdle)
+	}
+	if profile.conn.config.MinIdleConns != 2 {
+		t.Fatalf("query_cache min idle = %d, want 2", profile.conn.config.MinIdleConns)
+	}
+}
+
 func TestNamedRedisRegistryMarksUnavailableProfilesWithoutBreakingDefault(t *testing.T) {
 	mr := miniredis.RunT(t)
 

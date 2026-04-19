@@ -57,7 +57,7 @@ func NewNamedRedisRegistry(defaultConfig *RedisConfig, profiles map[string]*Redi
 			continue
 		}
 		r.profiles[name] = &namedRedisProfile{
-			conn: NewRedisConnection(cloneRedisConfig(cfg)),
+			conn: NewRedisConnection(mergeRedisConfig(defaultConfig, cfg)),
 		}
 	}
 	return r
@@ -295,6 +295,76 @@ func cloneRedisConfig(cfg *RedisConfig) *RedisConfig {
 		copyCfg.Addrs = append([]string(nil), cfg.Addrs...)
 	}
 	return &copyCfg
+}
+
+func mergeRedisConfig(base, override *RedisConfig) *RedisConfig {
+	if override == nil {
+		return cloneRedisConfig(base)
+	}
+	if base == nil {
+		return cloneRedisConfig(override)
+	}
+
+	merged := cloneRedisConfig(base)
+	if merged == nil {
+		merged = &RedisConfig{}
+	}
+
+	if override.Host != "" {
+		merged.Host = override.Host
+	}
+	if override.Port != 0 {
+		merged.Port = override.Port
+	}
+	if len(override.Addrs) > 0 {
+		merged.Addrs = append([]string(nil), override.Addrs...)
+	}
+	if override.Username != "" {
+		merged.Username = override.Username
+	}
+	if override.Password != "" {
+		merged.Password = override.Password
+	}
+
+	// Database 0 is valid, so always honor the named profile's DB selection.
+	merged.Database = override.Database
+
+	if override.MaxIdle != 0 {
+		merged.MaxIdle = override.MaxIdle
+	}
+	if override.MaxActive != 0 {
+		merged.MaxActive = override.MaxActive
+	}
+	if override.Timeout != 0 {
+		merged.Timeout = override.Timeout
+	}
+	if override.MinIdleConns != 0 {
+		merged.MinIdleConns = override.MinIdleConns
+	}
+	if override.PoolTimeout != 0 {
+		merged.PoolTimeout = override.PoolTimeout
+	}
+	if override.DialTimeout != 0 {
+		merged.DialTimeout = override.DialTimeout
+	}
+	if override.ReadTimeout != 0 {
+		merged.ReadTimeout = override.ReadTimeout
+	}
+	if override.WriteTimeout != 0 {
+		merged.WriteTimeout = override.WriteTimeout
+	}
+
+	if override.EnableCluster {
+		merged.EnableCluster = true
+	}
+	if override.UseSSL {
+		merged.UseSSL = true
+	}
+	if override.SSLInsecureSkipVerify {
+		merged.SSLInsecureSkipVerify = true
+	}
+
+	return merged
 }
 
 func (p *namedRedisProfile) markAvailable() {

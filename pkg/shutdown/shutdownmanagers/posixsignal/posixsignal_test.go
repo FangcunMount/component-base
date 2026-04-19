@@ -5,6 +5,7 @@
 package posixsignal
 
 import (
+	"reflect"
 	"syscall"
 	"testing"
 	"time"
@@ -71,4 +72,37 @@ func TestStartShutdownCalledCustomSignal(t *testing.T) {
 	_ = syscall.Kill(syscall.Getpid(), syscall.SIGHUP)
 
 	waitSig(t, c)
+}
+
+func TestSignalName(t *testing.T) {
+	psm := NewPosixSignalManager()
+	psm.setLastSignal(syscall.SIGTERM)
+
+	if got, want := psm.SignalName(), "terminated"; got != want {
+		t.Fatalf("SignalName() = %q, want %q", got, want)
+	}
+}
+
+func TestShutdownFinishFlushesBeforeExit(t *testing.T) {
+	psm := NewPosixSignalManager()
+	psm.setLastSignal(syscall.SIGINT)
+
+	var calls []string
+	psm.flushFn = func() {
+		calls = append(calls, "flush")
+	}
+	psm.exitFn = func(code int) {
+		calls = append(calls, "exit")
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0", code)
+		}
+	}
+
+	if err := psm.ShutdownFinish(); err != nil {
+		t.Fatalf("ShutdownFinish() error = %v", err)
+	}
+
+	if got, want := calls, []string{"flush", "exit"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("call order = %v, want %v", got, want)
+	}
 }

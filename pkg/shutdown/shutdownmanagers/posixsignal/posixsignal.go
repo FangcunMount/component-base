@@ -10,10 +10,13 @@ When ShutdownFinish is called it exits with os.Exit(0)
 package posixsignal
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
+	"github.com/FangcunMount/component-base/pkg/log"
 	"github.com/FangcunMount/component-base/pkg/shutdown"
 )
 
@@ -24,6 +27,11 @@ const Name = "PosixSignalManager"
 // to GracefulShutdown. Initialize with NewPosixSignalManager.
 type PosixSignalManager struct {
 	signals []os.Signal
+	flushFn func()
+	exitFn  func(int)
+
+	mu         sync.RWMutex
+	lastSignal os.Signal
 }
 
 // NewPosixSignalManager initializes the PosixSignalManager.
@@ -38,6 +46,8 @@ func NewPosixSignalManager(sig ...os.Signal) *PosixSignalManager {
 
 	return &PosixSignalManager{
 		signals: sig,
+		flushFn: log.Flush,
+		exitFn:  os.Exit,
 	}
 }
 
@@ -53,7 +63,14 @@ func (posixSignalManager *PosixSignalManager) Start(gs shutdown.GSInterface) err
 		signal.Notify(c, posixSignalManager.signals...)
 
 		// Block until a signal is received.
-		<-c
+		sig := <-c
+		signal.Stop(c)
+
+		posixSignalManager.setLastSignal(sig)
+		log.Infow("received shutdown signal",
+			"shutdown_manager", posixSignalManager.GetName(),
+			"signal", posixSignalManager.SignalName(),
+		)
 
 		gs.StartShutdown(posixSignalManager)
 	}()
@@ -61,14 +78,54 @@ func (posixSignalManager *PosixSignalManager) Start(gs shutdown.GSInterface) err
 	return nil
 }
 
-// ShutdownStart does nothing.
+// ShutdownStart logs the beginning of graceful shutdown.
 func (posixSignalManager *PosixSignalManager) ShutdownStart() error {
+	log.Infow("starting graceful shutdown",
+		"shutdown_manager", posixSignalManager.GetName(),
+		"signal", posixSignalManager.SignalName(),
+	)
 	return nil
 }
 
-// ShutdownFinish exits the app with os.Exit(0).
+// ShutdownFinish flushes logs and exits the app with status 0.
 func (posixSignalManager *PosixSignalManager) ShutdownFinish() error {
-	os.Exit(0)
+	log.Infow("graceful shutdown completed, flushing logs before exit",
+		"shutdown_manager", posixSignalManager.GetName(),
+		"signal", posixSignalManager.SignalName(),
+	)
+	if posixSignalManager.flushFn != nil {
+		posixSignalManager.flushFn()
+	}
+	if posixSignalManager.exitFn != nil {
+		posixSignalManager.exitFn(0)
+	}
 
 	return nil
+}
+
+// SignalName returns the last observed signal for logging/debugging.
+func (posixSignalManager *PosixSignalManager) SignalName() string {
+	posixSignalManager.mu.RLock()
+	defer posixSignalManager.mu.RUnlock()
+
+	if posixSignalManager.lastSignal == nil {
+		return "unknown"
+	}
+	return signalName(posixSignalManager.lastSignal)
+}
+
+func (posixSignalManager *PosixSignalManager) setLastSignal(sig os.Signal) {
+	posixSignalManager.mu.Lock()
+	defer posixSignalManager.mu.Unlock()
+	posixSignalManager.lastSignal = sig
+}
+
+func signalName(sig os.Signal) string {
+	if sig == nil {
+		return "unknown"
+	}
+	if stringer, ok := sig.(fmt.Stringer); ok {
+		return stringer.String()
+	}
+	return fmt.Sprintf("%v", sig)
 }

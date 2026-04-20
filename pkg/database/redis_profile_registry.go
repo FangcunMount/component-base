@@ -3,409 +3,114 @@ package database
 import (
 	"context"
 	"fmt"
-	"sync"
-	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+
+	redisruntime "github.com/FangcunMount/component-base/pkg/redis/runtime"
 )
 
-type RedisProfileState string
+type RedisProfileState = redisruntime.ProfileState
 
 const (
-	RedisProfileStateMissing     RedisProfileState = "missing"
-	RedisProfileStateAvailable   RedisProfileState = "available"
-	RedisProfileStateUnavailable RedisProfileState = "unavailable"
+	RedisProfileStateMissing     = redisruntime.ProfileStateMissing
+	RedisProfileStateAvailable   = redisruntime.ProfileStateAvailable
+	RedisProfileStateUnavailable = redisruntime.ProfileStateUnavailable
 )
 
-type RedisProfileStatus struct {
-	Name        string
-	State       RedisProfileState
-	Err         error
-	NextRetryAt time.Time
-}
+type RedisProfileStatus = redisruntime.ProfileStatus
 
-type namedRedisProfile struct {
-	conn        *RedisConnection
-	lastErr     error
-	nextRetryAt time.Time
-	retryDelay  time.Duration
-}
-
-const (
-	redisProfileInitialRetryDelay = 30 * time.Second
-	redisProfileMaxRetryDelay     = 5 * time.Minute
-)
-
-// NamedRedisRegistry manages a default Redis connection plus optional named profiles.
+// NamedRedisRegistry 管理默认 Redis 连接与可选命名 profile。
 type NamedRedisRegistry struct {
-	defaultConn *RedisConnection
-	profiles    map[string]*namedRedisProfile
-	mutex       sync.RWMutex
+	runtime *redisruntime.Registry
 }
 
-// NewNamedRedisRegistry creates a Redis registry with an optional default config
-// and a set of optional named profile configs.
+// NewNamedRedisRegistry 使用可选默认配置与命名 profile 配置创建 Redis 注册表。
 func NewNamedRedisRegistry(defaultConfig *RedisConfig, profiles map[string]*RedisConfig) *NamedRedisRegistry {
-	r := &NamedRedisRegistry{
-		profiles: make(map[string]*namedRedisProfile),
+	return &NamedRedisRegistry{
+		runtime: redisruntime.New(defaultConfig, profiles),
 	}
-	if defaultConfig != nil {
-		r.defaultConn = NewRedisConnection(cloneRedisConfig(defaultConfig))
-	}
-	for name, cfg := range profiles {
-		if name == "" || cfg == nil {
-			continue
-		}
-		r.profiles[name] = &namedRedisProfile{
-			conn: NewRedisConnection(mergeRedisConfig(defaultConfig, cfg)),
-		}
-	}
-	return r
 }
 
-// HasConnections reports whether the registry has at least one configured connection.
+// HasConnections 返回注册表是否至少存在一个已配置连接。
 func (r *NamedRedisRegistry) HasConnections() bool {
-	if r == nil {
-		return false
-	}
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
-	return r.defaultConn != nil || len(r.profiles) > 0
+	return r != nil && r.runtime != nil && r.runtime.HasConnections()
 }
 
-// Connect initializes the default and named Redis connections.
+// Connect 初始化默认连接与命名 profile 连接。
 func (r *NamedRedisRegistry) Connect() error {
-	if r == nil {
+	if r == nil || r.runtime == nil {
 		return nil
 	}
-
-	r.mutex.RLock()
-	defaultConn := r.defaultConn
-	profiles := make(map[string]*namedRedisProfile, len(r.profiles))
-	for name, profile := range r.profiles {
-		profiles[name] = profile
-	}
-	r.mutex.RUnlock()
-
-	if defaultConn != nil {
-		if err := defaultConn.Connect(); err != nil {
-			return fmt.Errorf("connect default redis: %w", err)
-		}
-	}
-	for name, profile := range profiles {
-		if profile == nil || profile.conn == nil {
-			continue
-		}
-		if err := profile.conn.Connect(); err != nil {
-			r.mutex.Lock()
-			if current := r.profiles[name]; current != nil {
-				current.markUnavailable(fmt.Errorf("connect redis profile %q: %w", name, err))
-			}
-			r.mutex.Unlock()
-			continue
-		}
-		r.mutex.Lock()
-		if current := r.profiles[name]; current != nil {
-			current.markAvailable()
-		}
-		r.mutex.Unlock()
-	}
-	return nil
+	return r.runtime.Connect()
 }
 
-// Close closes every initialized Redis connection.
+// Close 关闭所有已初始化的 Redis 连接。
 func (r *NamedRedisRegistry) Close() error {
-	if r == nil {
+	if r == nil || r.runtime == nil {
 		return nil
 	}
-
-	r.mutex.RLock()
-	defaultConn := r.defaultConn
-	profiles := make(map[string]*namedRedisProfile, len(r.profiles))
-	for name, profile := range r.profiles {
-		profiles[name] = profile
-	}
-	r.mutex.RUnlock()
-
-	var lastErr error
-	if defaultConn != nil {
-		if err := defaultConn.Close(); err != nil {
-			lastErr = fmt.Errorf("close default redis: %w", err)
-		}
-	}
-	for name, profile := range profiles {
-		if profile == nil || profile.conn == nil {
-			continue
-		}
-		if err := profile.conn.Close(); err != nil {
-			lastErr = fmt.Errorf("close redis profile %q: %w", name, err)
-		}
-	}
-	return lastErr
+	return r.runtime.Close()
 }
 
-// HealthCheck validates the default and named Redis connections.
+// HealthCheck 检查默认连接与命名 profile 连接的健康状态。
 func (r *NamedRedisRegistry) HealthCheck(ctx context.Context) error {
-	if r == nil {
+	if r == nil || r.runtime == nil {
 		return nil
 	}
-
-	r.mutex.RLock()
-	defaultConn := r.defaultConn
-	profiles := make(map[string]*namedRedisProfile, len(r.profiles))
-	for name, profile := range r.profiles {
-		profiles[name] = profile
-	}
-	r.mutex.RUnlock()
-
-	if defaultConn != nil {
-		if err := defaultConn.HealthCheck(ctx); err != nil {
-			return fmt.Errorf("health check default redis: %w", err)
-		}
-	}
-	for name, profile := range profiles {
-		if profile == nil || profile.conn == nil {
-			continue
-		}
-		if profile.lastErr != nil {
-			if !profile.retryDue(time.Now()) {
-				continue
-			}
-			if err := profile.reconnect(); err != nil {
-				r.mutex.Lock()
-				if current := r.profiles[name]; current != nil {
-					current.markUnavailable(fmt.Errorf("reconnect redis profile %q: %w", name, err))
-				}
-				r.mutex.Unlock()
-				continue
-			}
-			r.mutex.Lock()
-			if current := r.profiles[name]; current != nil {
-				current.markAvailable()
-			}
-			r.mutex.Unlock()
-			continue
-		}
-		if err := profile.conn.HealthCheck(ctx); err != nil {
-			r.mutex.Lock()
-			if current := r.profiles[name]; current != nil {
-				current.markUnavailable(fmt.Errorf("health check redis profile %q: %w", name, err))
-			}
-			r.mutex.Unlock()
-		}
-	}
-	return nil
+	return r.runtime.HealthCheck(ctx)
 }
 
-// ProfileStatus reports whether a named profile is missing, available, or unavailable.
+// ProfileStatus 返回指定命名 profile 的状态。
 func (r *NamedRedisRegistry) ProfileStatus(name string) RedisProfileStatus {
 	status := RedisProfileStatus{Name: name, State: RedisProfileStateMissing}
-	if r == nil || name == "" {
+	if r == nil || r.runtime == nil || name == "" {
 		return status
 	}
-
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
-
-	profile, ok := r.profiles[name]
-	if !ok || profile == nil {
-		return status
-	}
-	if profile.lastErr != nil {
-		return RedisProfileStatus{
-			Name:        name,
-			State:       RedisProfileStateUnavailable,
-			Err:         profile.lastErr,
-			NextRetryAt: profile.nextRetryAt,
-		}
-	}
-	return RedisProfileStatus{
-		Name:  name,
-		State: RedisProfileStateAvailable,
-	}
+	return r.runtime.Status(name)
 }
 
-// ProfileStatuses returns the current status of every configured named profile.
+// ProfileStatuses 返回所有已配置命名 profile 的当前状态。
 func (r *NamedRedisRegistry) ProfileStatuses() map[string]RedisProfileStatus {
-	if r == nil {
+	if r == nil || r.runtime == nil {
 		return nil
 	}
-
-	r.mutex.RLock()
-	names := make([]string, 0, len(r.profiles))
-	for name := range r.profiles {
-		names = append(names, name)
-	}
-	r.mutex.RUnlock()
-
-	statuses := make(map[string]RedisProfileStatus, len(names))
-	for _, name := range names {
-		statuses[name] = r.ProfileStatus(name)
-	}
-	return statuses
+	return r.runtime.Statuses()
 }
 
-// GetConnection returns the named profile connection. Missing profiles fall back to default,
-// while configured-but-unavailable profiles return an error.
+// GetConnection 返回指定命名 profile 的连接。
+// 缺失 profile 会回退到默认连接；已配置但不可用的 profile 会返回错误。
 func (r *NamedRedisRegistry) GetConnection(name string) (*RedisConnection, error) {
-	if r == nil {
+	if r == nil || r.runtime == nil {
 		return nil, fmt.Errorf("redis registry is nil")
 	}
-
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
-
-	if name != "" {
-		if profile, ok := r.profiles[name]; ok {
-			if profile == nil || profile.conn == nil {
-				return nil, fmt.Errorf("redis profile %q is unavailable", name)
-			}
-			if profile.lastErr != nil {
-				return nil, fmt.Errorf("redis profile %q is unavailable: %w", name, profile.lastErr)
-			}
-			return profile.conn, nil
-		}
-	}
-	if r.defaultConn != nil {
-		return r.defaultConn, nil
-	}
-	return nil, fmt.Errorf("redis connection for profile %q not found", name)
-}
-
-// GetClient returns the named profile Redis client. Missing profiles fall back to default,
-// while configured-but-unavailable profiles return an error.
-func (r *NamedRedisRegistry) GetClient(name string) (goredis.UniversalClient, error) {
-	conn, err := r.GetConnection(name)
+	handle, err := r.runtime.Bind(name)
 	if err != nil {
 		return nil, err
 	}
-	client, ok := conn.GetClient().(goredis.UniversalClient)
-	if !ok || client == nil {
-		return nil, fmt.Errorf("redis client for profile %q is unavailable", name)
+	return &RedisConnection{handle: handle}, nil
+}
+
+// GetClient 返回指定命名 profile 的 Redis 客户端。
+// 缺失 profile 会回退到默认连接；已配置但不可用的 profile 会返回错误。
+func (r *NamedRedisRegistry) GetClient(name string) (goredis.UniversalClient, error) {
+	if r == nil || r.runtime == nil {
+		return nil, fmt.Errorf("redis registry is nil")
 	}
-	return client, nil
+	return r.runtime.Client(name)
+}
+
+// Profiles 返回已配置命名 profile 的快照信息。
+func (r *NamedRedisRegistry) Profiles() []redisruntime.RedisProfile {
+	if r == nil || r.runtime == nil {
+		return nil
+	}
+	return r.runtime.Profiles()
 }
 
 func cloneRedisConfig(cfg *RedisConfig) *RedisConfig {
-	if cfg == nil {
-		return nil
-	}
-	copyCfg := *cfg
-	if len(cfg.Addrs) > 0 {
-		copyCfg.Addrs = append([]string(nil), cfg.Addrs...)
-	}
-	return &copyCfg
+	return redisruntime.CloneConfig(cfg)
 }
 
 func mergeRedisConfig(base, override *RedisConfig) *RedisConfig {
-	if override == nil {
-		return cloneRedisConfig(base)
-	}
-	if base == nil {
-		return cloneRedisConfig(override)
-	}
-
-	merged := cloneRedisConfig(base)
-	if merged == nil {
-		merged = &RedisConfig{}
-	}
-
-	if override.Host != "" {
-		merged.Host = override.Host
-	}
-	if override.Port != 0 {
-		merged.Port = override.Port
-	}
-	if len(override.Addrs) > 0 {
-		merged.Addrs = append([]string(nil), override.Addrs...)
-	}
-	if override.Username != "" {
-		merged.Username = override.Username
-	}
-	if override.Password != "" {
-		merged.Password = override.Password
-	}
-
-	// Database 0 is valid, so always honor the named profile's DB selection.
-	merged.Database = override.Database
-
-	if override.MaxIdle != 0 {
-		merged.MaxIdle = override.MaxIdle
-	}
-	if override.MaxActive != 0 {
-		merged.MaxActive = override.MaxActive
-	}
-	if override.Timeout != 0 {
-		merged.Timeout = override.Timeout
-	}
-	if override.MinIdleConns != 0 {
-		merged.MinIdleConns = override.MinIdleConns
-	}
-	if override.PoolTimeout != 0 {
-		merged.PoolTimeout = override.PoolTimeout
-	}
-	if override.DialTimeout != 0 {
-		merged.DialTimeout = override.DialTimeout
-	}
-	if override.ReadTimeout != 0 {
-		merged.ReadTimeout = override.ReadTimeout
-	}
-	if override.WriteTimeout != 0 {
-		merged.WriteTimeout = override.WriteTimeout
-	}
-
-	if override.EnableCluster {
-		merged.EnableCluster = true
-	}
-	if override.UseSSL {
-		merged.UseSSL = true
-	}
-	if override.SSLInsecureSkipVerify {
-		merged.SSLInsecureSkipVerify = true
-	}
-
-	return merged
-}
-
-func (p *namedRedisProfile) markAvailable() {
-	if p == nil {
-		return
-	}
-	p.lastErr = nil
-	p.nextRetryAt = time.Time{}
-	p.retryDelay = 0
-}
-
-func (p *namedRedisProfile) markUnavailable(err error) {
-	if p == nil {
-		return
-	}
-	p.lastErr = err
-	if p.retryDelay <= 0 {
-		p.retryDelay = redisProfileInitialRetryDelay
-	} else {
-		p.retryDelay *= 2
-		if p.retryDelay > redisProfileMaxRetryDelay {
-			p.retryDelay = redisProfileMaxRetryDelay
-		}
-	}
-	p.nextRetryAt = time.Now().Add(p.retryDelay)
-}
-
-func (p *namedRedisProfile) retryDue(now time.Time) bool {
-	if p == nil || p.lastErr == nil {
-		return false
-	}
-	if p.nextRetryAt.IsZero() {
-		return true
-	}
-	return !now.Before(p.nextRetryAt)
-}
-
-func (p *namedRedisProfile) reconnect() error {
-	if p == nil || p.conn == nil {
-		return fmt.Errorf("redis profile connection is nil")
-	}
-	_ = p.conn.Close()
-	return p.conn.Connect()
+	return redisruntime.MergeConfig(base, override)
 }

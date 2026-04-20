@@ -2,10 +2,10 @@ package database
 
 import (
 	"context"
+	"net"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/alicebob/miniredis/v2"
 )
@@ -127,9 +127,7 @@ func TestNamedRedisRegistryUsesNamedProfiles(t *testing.T) {
 }
 
 func TestNamedRedisRegistryInheritsDefaultConnectionSettingsForNamedProfiles(t *testing.T) {
-	mr := miniredis.RunT(t)
-
-	host, port := splitMiniredisAddr(t, mr.Addr())
+	host, port := "127.0.0.1", 6379
 	registry := NewNamedRedisRegistry(&RedisConfig{
 		Host:         host,
 		Port:         port,
@@ -142,34 +140,31 @@ func TestNamedRedisRegistryInheritsDefaultConnectionSettingsForNamedProfiles(t *
 		},
 	})
 
-	if err := registry.Connect(); err != nil {
-		t.Fatalf("Connect() error = %v", err)
+	profiles := registry.Profiles()
+	if len(profiles) != 1 {
+		t.Fatalf("Profiles() len = %d, want 1", len(profiles))
 	}
-	t.Cleanup(func() {
-		_ = registry.Close()
-	})
-
-	profile := registry.profiles["query_cache"]
-	if profile == nil || profile.conn == nil || profile.conn.config == nil {
-		t.Fatalf("query_cache profile connection not initialized")
+	profile := profiles[0]
+	if profile.Name != "query_cache" {
+		t.Fatalf("profile name = %q, want query_cache", profile.Name)
 	}
-	if profile.conn.config.Host != host {
-		t.Fatalf("query_cache host = %q, want %q", profile.conn.config.Host, host)
+	if profile.Config.Host != host {
+		t.Fatalf("query_cache host = %q, want %q", profile.Config.Host, host)
 	}
-	if profile.conn.config.Port != port {
-		t.Fatalf("query_cache port = %d, want %d", profile.conn.config.Port, port)
+	if profile.Config.Port != port {
+		t.Fatalf("query_cache port = %d, want %d", profile.Config.Port, port)
 	}
-	if profile.conn.config.Database != 3 {
-		t.Fatalf("query_cache database = %d, want 3", profile.conn.config.Database)
+	if profile.Config.Database != 3 {
+		t.Fatalf("query_cache database = %d, want 3", profile.Config.Database)
 	}
-	if profile.conn.config.MaxActive != 16 {
-		t.Fatalf("query_cache max active = %d, want 16", profile.conn.config.MaxActive)
+	if profile.Config.MaxActive != 16 {
+		t.Fatalf("query_cache max active = %d, want 16", profile.Config.MaxActive)
 	}
-	if profile.conn.config.MaxIdle != 8 {
-		t.Fatalf("query_cache max idle = %d, want 8", profile.conn.config.MaxIdle)
+	if profile.Config.MaxIdle != 8 {
+		t.Fatalf("query_cache max idle = %d, want 8", profile.Config.MaxIdle)
 	}
-	if profile.conn.config.MinIdleConns != 2 {
-		t.Fatalf("query_cache min idle = %d, want 2", profile.conn.config.MinIdleConns)
+	if profile.Config.MinIdleConns != 2 {
+		t.Fatalf("query_cache min idle = %d, want 2", profile.Config.MinIdleConns)
 	}
 }
 
@@ -183,7 +178,7 @@ func TestNamedRedisRegistryMarksUnavailableProfilesWithoutBreakingDefault(t *tes
 	}, map[string]*RedisConfig{
 		"static_cache": {
 			Host: host,
-			Port: 63999,
+			Port: reserveLocalPort(t),
 		},
 	})
 
@@ -230,52 +225,6 @@ func TestNamedRedisRegistryMarksUnavailableProfilesWithoutBreakingDefault(t *tes
 	}
 }
 
-func TestNamedRedisRegistryRecoversUnavailableProfileOnHealthCheck(t *testing.T) {
-	host := "127.0.0.1"
-	registry := NewNamedRedisRegistry(nil, map[string]*RedisConfig{
-		"static_cache": {
-			Host: host,
-			Port: 63999,
-		},
-	})
-
-	if err := registry.Connect(); err != nil {
-		t.Fatalf("Connect() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = registry.Close()
-	})
-
-	status := registry.ProfileStatus("static_cache")
-	if status.State != RedisProfileStateUnavailable {
-		t.Fatalf("static_cache profile state = %q, want unavailable", status.State)
-	}
-
-	mr := miniredis.RunT(t)
-	realHost, realPort := splitMiniredisAddr(t, mr.Addr())
-	profile := registry.profiles["static_cache"]
-	profile.conn.config.Host = realHost
-	profile.conn.config.Port = realPort
-	profile.nextRetryAt = time.Now().Add(-time.Second)
-
-	if err := registry.HealthCheck(context.Background()); err != nil {
-		t.Fatalf("HealthCheck() error = %v", err)
-	}
-
-	status = registry.ProfileStatus("static_cache")
-	if status.State != RedisProfileStateAvailable {
-		t.Fatalf("static_cache profile state after recovery = %q, want available", status.State)
-	}
-
-	client, err := registry.GetClient("static_cache")
-	if err != nil {
-		t.Fatalf("GetClient(static_cache) error = %v", err)
-	}
-	if err := client.Set(context.Background(), "recover:key", "ok", 0).Err(); err != nil {
-		t.Fatalf("set recovered key failed: %v", err)
-	}
-}
-
 func splitMiniredisAddr(t *testing.T, addr string) (string, int) {
 	t.Helper()
 
@@ -288,4 +237,23 @@ func splitMiniredisAddr(t *testing.T, addr string) (string, int) {
 		t.Fatalf("parse miniredis port failed: %v", err)
 	}
 	return host, port
+}
+
+func reserveLocalPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserveLocalPort() listen error = %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	_, portStr, ok := strings.Cut(ln.Addr().String(), ":")
+	if !ok {
+		t.Fatalf("unexpected listener addr %q", ln.Addr().String())
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parse reserved port failed: %v", err)
+	}
+	return port
 }

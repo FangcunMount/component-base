@@ -1,39 +1,22 @@
 package rediskit
 
-import "strings"
+import rediskeyspace "github.com/FangcunMount/component-base/pkg/redis/keyspace"
 
-// NormalizeNamespace trims trailing/leading separators from a Redis namespace.
+// Namespace 是 Foundation 层命名空间值对象的兼容别名。
+type Namespace = rediskeyspace.Namespace
+
+// KeyPattern 是带命名空间模式值对象的兼容别名。
+type KeyPattern = rediskeyspace.KeyPattern
+
+// Keyspace 是 Foundation 层 Keyspace 的兼容别名。
+type Keyspace = rediskeyspace.Keyspace
+
+// NormalizeNamespace 去掉 Redis 命名空间两端的分隔符。
 func NormalizeNamespace(ns string) string {
-	return strings.Trim(ns, ":")
+	return rediskeyspace.NormalizeNamespace(ns)
 }
 
-// Keyspace prefixes raw Redis keys with an optional namespace.
-type Keyspace struct {
-	Namespace string
-}
-
-// NewKeyspace creates a namespaced keyspace helper.
+// NewKeyspace 创建带命名空间的 Keyspace 兼容入口。
 func NewKeyspace(namespace string) Keyspace {
-	return Keyspace{Namespace: NormalizeNamespace(namespace)}
-}
-
-// Child returns a nested keyspace under the current namespace.
-func (k Keyspace) Child(child string) Keyspace {
-	child = NormalizeNamespace(child)
-	switch {
-	case k.Namespace == "":
-		return NewKeyspace(child)
-	case child == "":
-		return NewKeyspace(k.Namespace)
-	default:
-		return NewKeyspace(k.Namespace + ":" + child)
-	}
-}
-
-// Prefix returns the key with namespace applied when configured.
-func (k Keyspace) Prefix(key string) string {
-	if k.Namespace == "" {
-		return key
-	}
-	return k.Namespace + ":" + key
+	return rediskeyspace.New(namespace)
 }

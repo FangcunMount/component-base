@@ -2,68 +2,36 @@ package rediskit
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+
+	redislease "github.com/FangcunMount/component-base/pkg/redis/lease"
 )
 
-var releaseLeaseScript = goredis.NewScript(`
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-	return redis.call("DEL", KEYS[1])
-else
-	return 0
-end
-`)
-
-// AcquireLease tries to acquire a leased lock using SET NX EX semantics.
+// AcquireLease 使用 SET NX EX 语义尝试获取租约锁。
 func AcquireLease(ctx context.Context, client goredis.UniversalClient, key string, ttl time.Duration) (string, bool, error) {
-	if client == nil {
-		return "", false, fmt.Errorf("redis client is nil")
-	}
-	if key == "" {
-		return "", false, fmt.Errorf("lock key is empty")
-	}
-	if ttl <= 0 {
-		return "", false, fmt.Errorf("lock ttl must be positive")
-	}
-
-	token, err := generateLeaseToken()
+	leaseKey, err := redislease.NewLeaseKey(key)
 	if err != nil {
 		return "", false, err
 	}
-	ok, err := client.SetNX(ctx, key, token, ttl).Result()
+	attempt, err := redislease.NewService(client).Acquire(ctx, leaseKey, ttl, nil)
 	if err != nil {
 		return "", false, err
 	}
-	if !ok {
+	if !attempt.Acquired {
 		return "", false, nil
 	}
-	return token, true, nil
+	return attempt.Lease.Token.String(), true, nil
 }
 
-// ReleaseLease releases a lock only when the lease token matches.
+// ReleaseLease 仅在租约 token 仍匹配时释放锁。
 func ReleaseLease(ctx context.Context, client goredis.UniversalClient, key, token string) error {
-	if client == nil {
-		return fmt.Errorf("redis client is nil")
-	}
 	if key == "" || token == "" {
 		return nil
 	}
-
-	_, err := releaseLeaseScript.Run(ctx, client, []string{key}, token).Result()
-	if err == goredis.Nil {
-		return nil
-	}
-	return err
-}
-
-func generateLeaseToken() (string, error) {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate lease token: %w", err)
-	}
-	return hex.EncodeToString(buf), nil
+	return redislease.NewService(client).Release(ctx, redislease.Lease{
+		Key:   redislease.MustLeaseKey(key),
+		Token: redislease.MustLeaseToken(token),
+	})
 }

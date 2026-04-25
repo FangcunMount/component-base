@@ -194,10 +194,14 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 				// 8. 调用 handler
 				if err := handler(ctx, domainMsg); err != nil {
 					// 处理失败，Nack（重新入队）
-					domainMsg.Nack()
+					if !domainMsg.IsSettled() {
+						domainMsg.Nack()
+					}
 				} else {
 					// 处理成功，Ack
-					domainMsg.Ack()
+					if !domainMsg.IsSettled() {
+						domainMsg.Ack()
+					}
 				}
 			}
 		}

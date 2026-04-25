@@ -54,9 +54,11 @@ func (p *publisher) Publish(ctx context.Context, topic string, body []byte) erro
 
 // PublishMessage 发布消息对象（支持 Metadata）
 func (p *publisher) PublishMessage(ctx context.Context, topic string, msg *messaging.Message) error {
-	// 直接使用 Payload 作为消息体
-	// TODO: 如果需要传递 Metadata，可以序列化成 JSON 格式
-	return p.Publish(ctx, topic, msg.Payload)
+	payload, err := messaging.EncodeMessagePayload(msg)
+	if err != nil {
+		return err
+	}
+	return p.Publish(ctx, topic, payload)
 }
 
 // PublishAsync 异步发布消息

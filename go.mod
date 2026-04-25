@@ -1,6 +1,6 @@
 module github.com/FangcunMount/component-base
 
-go 1.24.0
+go 1.25.9
 
 require (
 	github.com/FangcunMount/iam-contracts v0.0.0-20251027062840-64032f817e9e

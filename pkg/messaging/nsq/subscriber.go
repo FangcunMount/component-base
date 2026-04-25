@@ -62,15 +62,27 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 	// 添加消息处理器（并发）
 	consumer.AddConcurrentHandlers(nsq.HandlerFunc(func(message *nsq.Message) error {
 		// 将 NSQ 的 Message 转换为领域层的 Message
-		domainMsg := &messaging.Message{
-			UUID:      string(message.ID[:]),
-			Payload:   message.Body,
-			Metadata:  make(map[string]string),
-			Attempts:  message.Attempts,
-			Timestamp: message.Timestamp,
-			Topic:     topic,
-			Channel:   channel,
+		domainMsg, ok, err := messaging.DecodeMessagePayload(message.Body)
+		if err != nil {
+			return fmt.Errorf("failed to decode message envelope: %w", err)
 		}
+		if !ok {
+			domainMsg = &messaging.Message{
+				UUID:     string(message.ID[:]),
+				Payload:  message.Body,
+				Metadata: make(map[string]string),
+			}
+		}
+		if domainMsg.UUID == "" {
+			domainMsg.UUID = string(message.ID[:])
+		}
+		if domainMsg.Metadata == nil {
+			domainMsg.Metadata = make(map[string]string)
+		}
+		domainMsg.Attempts = message.Attempts
+		domainMsg.Timestamp = message.Timestamp
+		domainMsg.Topic = topic
+		domainMsg.Channel = channel
 
 		// 注入 Ack/Nack 函数
 		domainMsg.SetAckFunc(func() error {
@@ -88,12 +100,16 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 		// 调用业务层的 handler
 		if err := handler(ctx, domainMsg); err != nil {
 			// 如果处理失败，自动 Nack（重新入队）
-			domainMsg.Nack()
+			if !domainMsg.IsSettled() {
+				domainMsg.Nack()
+			}
 			return err
 		}
 
 		// 处理成功，自动 Ack
-		domainMsg.Ack()
+		if !domainMsg.IsSettled() {
+			domainMsg.Ack()
+		}
 		return nil
 	}), concurrency)
 

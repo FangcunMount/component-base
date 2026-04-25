@@ -1,6 +1,9 @@
 package messaging
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // Publisher 消息发布者接口
 // 领域层/应用层眼中的发布接口，与具体消息中间件解耦
@@ -78,6 +81,9 @@ type Message struct {
 
 	// nack 消息拒绝函数（由底层 Adapter 注入）
 	nack func() error
+
+	settleMu sync.Mutex
+	settled  bool
 }
 
 // NewMessage 创建新消息
@@ -92,19 +98,41 @@ func NewMessage(uuid string, payload []byte) *Message {
 // Ack 确认消息处理成功
 // 调用后，消息不会被重新投递
 func (m *Message) Ack() error {
-	if m.ack != nil {
-		return m.ack()
-	}
-	return nil
+	return m.settle(m.ack)
 }
 
 // Nack 拒绝消息，触发重试
 // 调用后，消息会被重新投递（如果未超过最大重试次数）
 func (m *Message) Nack() error {
-	if m.nack != nil {
-		return m.nack()
+	return m.settle(m.nack)
+}
+
+func (m *Message) settle(run func() error) error {
+	if m == nil {
+		return nil
+	}
+	m.settleMu.Lock()
+	if m.settled {
+		m.settleMu.Unlock()
+		return nil
+	}
+	m.settled = true
+	m.settleMu.Unlock()
+
+	if run != nil {
+		return run()
 	}
 	return nil
+}
+
+// IsSettled reports whether Ack or Nack has already been called.
+func (m *Message) IsSettled() bool {
+	if m == nil {
+		return true
+	}
+	m.settleMu.Lock()
+	defer m.settleMu.Unlock()
+	return m.settled
 }
 
 // SetAckFunc 设置确认函数（由 Adapter 调用）

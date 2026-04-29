@@ -52,23 +52,46 @@ type EventConfig struct {
 	Handler     string        `yaml:"handler"`
 }
 
+// ValidateOptions controls optional catalog policies. The zero value keeps only
+// structural validation, while Validate uses StrictValidateOptions for backward
+// compatible service startup checks.
+type ValidateOptions struct {
+	RequireHandler         bool
+	RequireTopicReferenced bool
+}
+
+var StrictValidateOptions = ValidateOptions{
+	RequireHandler:         true,
+	RequireTopicReferenced: true,
+}
+
 // Load 从磁盘读取并校验事件目录。
 func Load(path string) (*Config, error) {
+	return LoadWithOptions(path, StrictValidateOptions)
+}
+
+// LoadWithOptions 从磁盘读取并使用指定策略校验事件目录。
+func LoadWithOptions(path string, opts ValidateOptions) (*Config, error) {
 	// #nosec G304 -- 配置路径由可信的服务启动参数提供。
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
-	return Parse(data)
+	return ParseWithOptions(data, opts)
 }
 
 // Parse 解码并校验事件目录。
 func Parse(data []byte) (*Config, error) {
+	return ParseWithOptions(data, StrictValidateOptions)
+}
+
+// ParseWithOptions 解码并使用指定策略校验事件目录。
+func ParseWithOptions(data []byte, opts ValidateOptions) (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.ValidateWithOptions(opts); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 	return &cfg, nil
@@ -76,13 +99,18 @@ func Parse(data []byte) (*Config, error) {
 
 // Validate 校验 topic、handler 和 delivery 引用。
 func (c *Config) Validate() error {
+	return c.ValidateWithOptions(StrictValidateOptions)
+}
+
+// ValidateWithOptions 校验 topic、delivery 引用，并按策略校验 handler 和 topic 使用情况。
+func (c *Config) ValidateWithOptions(opts ValidateOptions) error {
 	referencedTopics := make(map[string]struct{}, len(c.Topics))
 
 	for eventType, eventCfg := range c.Events {
 		if _, ok := c.Topics[eventCfg.Topic]; !ok {
 			return fmt.Errorf("event %q references unknown topic %q", eventType, eventCfg.Topic)
 		}
-		if eventCfg.Handler == "" {
+		if opts.RequireHandler && eventCfg.Handler == "" {
 			return fmt.Errorf("event %q has empty handler", eventType)
 		}
 		if eventCfg.Delivery == "" {
@@ -94,9 +122,11 @@ func (c *Config) Validate() error {
 		referencedTopics[eventCfg.Topic] = struct{}{}
 	}
 
-	for topicKey := range c.Topics {
-		if _, ok := referencedTopics[topicKey]; !ok {
-			return fmt.Errorf("topic %q has no events", topicKey)
+	if opts.RequireTopicReferenced {
+		for topicKey := range c.Topics {
+			if _, ok := referencedTopics[topicKey]; !ok {
+				return fmt.Errorf("topic %q has no events", topicKey)
+			}
 		}
 	}
 	return nil

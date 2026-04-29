@@ -1,0 +1,113 @@
+package ratelimit
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestLocalLimiterAllowsThenLimitsWithRetryAfter(t *testing.T) {
+	limiter := NewLocalLimiter(testPolicy("local"))
+
+	first := limiter.Decide(context.Background(), "")
+	if !first.Allowed || first.Outcome != OutcomeAllowed {
+		t.Fatalf("first decision = %#v, want allowed", first)
+	}
+
+	second := limiter.Decide(context.Background(), "")
+	if second.Allowed {
+		t.Fatalf("second decision = %#v, want limited", second)
+	}
+	if second.Outcome != OutcomeRateLimited {
+		t.Fatalf("outcome = %s, want %s", second.Outcome, OutcomeRateLimited)
+	}
+	if second.RetryAfterSeconds < 1 {
+		t.Fatalf("retryAfterSeconds = %d, want positive", second.RetryAfterSeconds)
+	}
+}
+
+func TestKeyedLocalLimiterIsIndependentPerKeyAndUsesAnonymousFallback(t *testing.T) {
+	limiter := NewKeyedLocalLimiter(testPolicy("local_key"))
+
+	if !limiter.Decide(context.Background(), "a").Allowed {
+		t.Fatal("first key a decision should be allowed")
+	}
+	if limiter.Decide(context.Background(), "a").Allowed {
+		t.Fatal("second key a decision should be limited")
+	}
+	if !limiter.Decide(context.Background(), "b").Allowed {
+		t.Fatal("first key b decision should be allowed")
+	}
+	if !limiter.Decide(context.Background(), "").Allowed {
+		t.Fatal("first anonymous decision should be allowed")
+	}
+	if limiter.Decide(context.Background(), "").Allowed {
+		t.Fatal("second anonymous decision should be limited")
+	}
+}
+
+func TestLocalLimiterInvalidPolicyRejectsWithRetryAfter(t *testing.T) {
+	limiter := NewLocalLimiter(Policy{Strategy: "local"})
+	decision := limiter.Decide(context.Background(), "")
+	if decision.Allowed {
+		t.Fatalf("decision = %#v, want rejected", decision)
+	}
+	if decision.RetryAfterSeconds != 1 {
+		t.Fatalf("retryAfterSeconds = %d, want 1", decision.RetryAfterSeconds)
+	}
+}
+
+func TestDistributedLimiterAllowsLimitsAndDegradesOpen(t *testing.T) {
+	backend := &fakeBackend{
+		allowed:    false,
+		retryAfter: 1500 * time.Millisecond,
+	}
+	limiter := NewDistributedLimiter(backend, testPolicy("redis"))
+
+	decision := limiter.Decide(context.Background(), "limit:submit:global")
+	if decision.Allowed {
+		t.Fatalf("decision = %#v, want limited", decision)
+	}
+	if decision.RetryAfterSeconds != 2 {
+		t.Fatalf("retryAfterSeconds = %d, want 2", decision.RetryAfterSeconds)
+	}
+
+	backend.allowed = true
+	decision = limiter.Decide(context.Background(), "limit:submit:global")
+	if !decision.Allowed || decision.Outcome != OutcomeAllowed {
+		t.Fatalf("decision = %#v, want allowed", decision)
+	}
+
+	backend.err = errors.New("redis down")
+	decision = limiter.Decide(context.Background(), "limit:submit:global")
+	if !decision.Allowed || decision.Outcome != OutcomeDegradedOpen {
+		t.Fatalf("decision = %#v, want degraded open", decision)
+	}
+
+	decision = NewDistributedLimiter(nil, testPolicy("redis")).Decide(context.Background(), "limit:submit:global")
+	if !decision.Allowed || decision.Outcome != OutcomeDegradedOpen {
+		t.Fatalf("nil backend decision = %#v, want degraded open", decision)
+	}
+}
+
+func testPolicy(strategy string) Policy {
+	return Policy{
+		Component:     "test",
+		Scope:         "submit",
+		Resource:      "global",
+		Strategy:      strategy,
+		RatePerSecond: 1,
+		Burst:         1,
+	}
+}
+
+type fakeBackend struct {
+	allowed    bool
+	retryAfter time.Duration
+	err        error
+}
+
+func (f *fakeBackend) Allow(context.Context, string, float64, int) (bool, time.Duration, error) {
+	return f.allowed, f.retryAfter, f.err
+}

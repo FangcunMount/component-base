@@ -74,8 +74,10 @@ require (
 	github.com/spf13/pflag v1.0.10
 	go.mongodb.org/mongo-driver v1.17.6
 	go.uber.org/zap v1.27.0
+	golang.org/x/time v0.12.0
 	google.golang.org/grpc v1.80.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
+	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.6.0
 	k8s.io/klog v1.0.0
 )

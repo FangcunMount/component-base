@@ -42,7 +42,8 @@ func TestNotifyAndWatch(t *testing.T) {
 	client, cleanup := newRedisClient(t)
 	defer cleanup()
 
-	s := NewSignaler[testSignal](client, Options{Prefix: "qs:signal"})
+	var universalClient goredis.UniversalClient = client
+	s := NewSignaler[testSignal](universalClient, Options{Prefix: "qs:signal"})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

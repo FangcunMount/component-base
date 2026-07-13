@@ -10,18 +10,18 @@ import (
 
 // Signaler 实现 signaling.Notifier 与 signaling.Watcher。
 type Signaler[T signaling.Signal] struct {
-	client *goredis.Client
+	client goredis.UniversalClient
 	opts   Options
 	codec  Codec[T]
 }
 
 // NewSignaler 创建 Redis signaling 实现。
-func NewSignaler[T signaling.Signal](client *goredis.Client, opts Options) *Signaler[T] {
+func NewSignaler[T signaling.Signal](client goredis.UniversalClient, opts Options) *Signaler[T] {
 	return NewSignalerWithCodec[T](client, opts, JSONCodec[T]{})
 }
 
 // NewSignalerWithCodec 使用自定义 codec 创建 Signaler。
-func NewSignalerWithCodec[T signaling.Signal](client *goredis.Client, opts Options, codec Codec[T]) *Signaler[T] {
+func NewSignalerWithCodec[T signaling.Signal](client goredis.UniversalClient, opts Options, codec Codec[T]) *Signaler[T] {
 	if codec == nil {
 		codec = JSONCodec[T]{}
 	}

@@ -37,3 +37,20 @@ type Manager interface {
 	AcquireSpec(ctx context.Context, spec Spec, key string, ttlOverride ...time.Duration) (*Lease, bool, error)
 	ReleaseSpec(ctx context.Context, spec Spec, key string, lease *Lease) error
 }
+
+// Renewer 是可选的租约续租端口。旧的 Manager 实现无需实现该接口。
+type Renewer interface {
+	RenewSpec(
+		ctx context.Context,
+		spec Spec,
+		key string,
+		lease *Lease,
+		ttlOverride ...time.Duration,
+	) (owned bool, err error)
+}
+
+// RenewableManager 同时提供租约获取、释放和续租能力。
+type RenewableManager interface {
+	Manager
+	Renewer
+}

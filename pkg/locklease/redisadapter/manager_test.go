@@ -105,3 +105,87 @@ func TestManagerRejectsInvalidSpecAndIdentity(t *testing.T) {
 		t.Fatal("expected invalid ttl to not acquire lock")
 	}
 }
+
+func TestManagerRenewSpecRefreshesTTLAndRequiresOwnership(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	spec := locklease.Spec{Name: "submit", DefaultTTL: 9 * time.Second}
+	manager := NewManager(client, func(key string) string { return "locks:" + key })
+	var _ locklease.RenewableManager = manager
+
+	lease, acquired, err := manager.AcquireSpec(context.Background(), spec, "submit:req-1")
+	if err != nil || !acquired {
+		t.Fatalf("AcquireSpec() got acquired=%v err=%v", acquired, err)
+	}
+	mr.FastForward(6 * time.Second)
+
+	owned, err := manager.RenewSpec(context.Background(), spec, "submit:req-1", lease)
+	if err != nil {
+		t.Fatalf("RenewSpec() error = %v", err)
+	}
+	if !owned {
+		t.Fatal("RenewSpec() owned = false, want true")
+	}
+	if ttl := mr.TTL(lease.Key); ttl != spec.DefaultTTL {
+		t.Fatalf("renewed ttl = %s, want %s", ttl, spec.DefaultTTL)
+	}
+
+	owned, err = manager.RenewSpec(context.Background(), spec, "submit:req-1", &locklease.Lease{
+		Key:   lease.Key,
+		Token: "wrong-token",
+	})
+	if err != nil {
+		t.Fatalf("RenewSpec() with wrong token error = %v", err)
+	}
+	if owned {
+		t.Fatal("RenewSpec() with wrong token owned = true, want false")
+	}
+
+	mr.FastForward(spec.DefaultTTL + time.Second)
+	owned, err = manager.RenewSpec(context.Background(), spec, "submit:req-1", lease)
+	if err != nil {
+		t.Fatalf("RenewSpec() after expiry error = %v", err)
+	}
+	if owned {
+		t.Fatal("RenewSpec() after expiry owned = true, want false")
+	}
+}
+
+func TestManagerRenewSpecReturnsRedisError(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	manager := NewManager(client, nil)
+	spec := locklease.Spec{Name: "leader", DefaultTTL: time.Minute}
+
+	lease, acquired, err := manager.AcquireSpec(context.Background(), spec, "leader")
+	if err != nil || !acquired {
+		t.Fatalf("AcquireSpec() got acquired=%v err=%v", acquired, err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	owned, err := manager.RenewSpec(context.Background(), spec, "leader", lease)
+	if err == nil {
+		t.Fatal("RenewSpec() error = nil, want Redis error")
+	}
+	if owned {
+		t.Fatal("RenewSpec() owned = true on Redis error")
+	}
+}
+
+func TestLegacyManagerImplementationRemainsCompatible(t *testing.T) {
+	var _ locklease.Manager = legacyManager{}
+}
+
+type legacyManager struct{}
+
+func (legacyManager) AcquireSpec(context.Context, locklease.Spec, string, ...time.Duration) (*locklease.Lease, bool, error) {
+	return nil, false, nil
+}
+
+func (legacyManager) ReleaseSpec(context.Context, locklease.Spec, string, *locklease.Lease) error {
+	return nil
+}

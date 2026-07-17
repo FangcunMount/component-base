@@ -107,6 +107,41 @@ func (m *Manager) AcquireSpec(ctx context.Context, spec locklease.Spec, key stri
 	return m.Acquire(ctx, spec.Identity(key), ttl)
 }
 
+// RenewSpec 根据语义锁规格续租当前租约。
+func (m *Manager) RenewSpec(ctx context.Context, spec locklease.Spec, key string, lease *locklease.Lease, ttlOverride ...time.Duration) (bool, error) {
+	ttl := spec.DefaultTTL
+	if len(ttlOverride) > 0 && ttlOverride[0] > 0 {
+		ttl = ttlOverride[0]
+	}
+	if spec.Name == "" {
+		return false, fmt.Errorf("lock spec name is empty")
+	}
+	if ttl <= 0 {
+		return false, fmt.Errorf("lock spec ttl must be greater than 0")
+	}
+	if m == nil || m.service == nil {
+		return false, fmt.Errorf("lock manager is unavailable")
+	}
+	if lease == nil || lease.Key == "" || lease.Token == "" {
+		return false, fmt.Errorf("lease key/token is empty")
+	}
+
+	leaseKey, err := redislease.NewLeaseKey(lease.Key)
+	if err != nil {
+		return false, err
+	}
+	token, err := redislease.NewLeaseToken(lease.Token)
+	if err != nil {
+		return false, err
+	}
+	_, owned, err := m.service.Renew(ctx, redislease.Lease{
+		Key:   leaseKey,
+		Token: token,
+		Owner: &redislease.LeaseOwner{Label: spec.Identity(key).Name},
+	}, ttl)
+	return owned, err
+}
+
 // Release 释放一个已获取的具体锁租约。
 func (m *Manager) Release(ctx context.Context, identity locklease.Identity, lease *locklease.Lease) error {
 	if m == nil || lease == nil || lease.Key == "" || lease.Token == "" {

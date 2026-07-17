@@ -82,6 +82,16 @@ func NewService(client goredis.UniversalClient, opts ...Option) *Service {
 	return svc
 }
 
+func validateTTL(ttl time.Duration) error {
+	if ttl <= 0 {
+		return fmt.Errorf("lock ttl must be positive")
+	}
+	if ttl < time.Millisecond {
+		return fmt.Errorf("lock ttl must be at least 1ms")
+	}
+	return nil
+}
+
 // Acquire 使用 SET NX 语义尝试获取租约锁。
 func (s *Service) Acquire(ctx context.Context, key LeaseKey, ttl time.Duration, owner *LeaseOwner) (LeaseAttempt, error) {
 	if s == nil || s.client == nil {
@@ -90,8 +100,8 @@ func (s *Service) Acquire(ctx context.Context, key LeaseKey, ttl time.Duration, 
 	if key.String() == "" {
 		return LeaseAttempt{}, fmt.Errorf("lock key is empty")
 	}
-	if ttl <= 0 {
-		return LeaseAttempt{}, fmt.Errorf("lock ttl must be positive")
+	if err := validateTTL(ttl); err != nil {
+		return LeaseAttempt{}, err
 	}
 
 	token, err := s.tokenSource.NewToken(ctx)
@@ -148,8 +158,8 @@ func (s *Service) Renew(ctx context.Context, lease Lease, ttl time.Duration) (Le
 	if lease.Key.String() == "" || lease.Token.String() == "" {
 		return Lease{}, false, fmt.Errorf("lease key/token is empty")
 	}
-	if ttl <= 0 {
-		return Lease{}, false, fmt.Errorf("lock ttl must be positive")
+	if err := validateTTL(ttl); err != nil {
+		return Lease{}, false, err
 	}
 
 	result, err := renewScript.Run(ctx, s.client, []string{lease.Key.String()}, lease.Token.String(), ttl.Milliseconds()).Int64()

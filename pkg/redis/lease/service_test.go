@@ -90,3 +90,28 @@ func TestServiceRenewWithWrongTokenFailsGracefully(t *testing.T) {
 		t.Fatalf("original lease should still own the key")
 	}
 }
+
+func TestServiceAcquireAndRenewRejectSubMillisecondTTL(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+
+	service := NewService(client)
+	ctx := context.Background()
+	key := MustLeaseKey("lock:ttl-boundary")
+
+	if _, err := service.Acquire(ctx, key, time.Nanosecond, nil); err == nil {
+		t.Fatal("Acquire() with sub-millisecond ttl error = nil")
+	}
+
+	attempt, err := service.Acquire(ctx, key, time.Millisecond, nil)
+	if err != nil || !attempt.Acquired {
+		t.Fatalf("Acquire() with 1ms ttl = %+v, %v; want acquired lease", attempt, err)
+	}
+	if _, _, err := service.Renew(ctx, attempt.Lease, time.Nanosecond); err == nil {
+		t.Fatal("Renew() with sub-millisecond ttl error = nil")
+	}
+	if _, owned, err := service.Renew(ctx, attempt.Lease, time.Millisecond); err != nil || !owned {
+		t.Fatalf("Renew() with 1ms ttl owned=%v err=%v; want owned lease", owned, err)
+	}
+}

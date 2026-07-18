@@ -28,6 +28,13 @@ type consumer struct {
 // url 格式：amqp://username:password@host:port/vhost
 // 例如：amqp://guest:guest@localhost:5672/
 func NewSubscriber(url string) (messaging.Subscriber, error) {
+	return NewSubscriberWithOptions(url, messaging.SubscriberOptions{})
+}
+
+// NewSubscriberWithOptions is an additive constructor. The current adapter
+// applies MaxInFlight immediately; bounded retry/DLQ behavior can be supplied
+// by callers during the compatibility window without breaking Subscriber.
+func NewSubscriberWithOptions(url string, opts messaging.SubscriberOptions) (messaging.Subscriber, error) {
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("连接 RabbitMQ 失败: %w", err)
@@ -40,10 +47,14 @@ func NewSubscriber(url string) (messaging.Subscriber, error) {
 	}
 
 	// 设置 QoS
+	prefetch := opts.MaxInFlight
+	if prefetch <= 0 {
+		prefetch = 200
+	}
 	err = ch.Qos(
-		200,   // prefetch count
-		0,     // prefetch size
-		false, // global
+		prefetch, // prefetch count
+		0,        // prefetch size
+		false,    // global
 	)
 	if err != nil {
 		ch.Close()

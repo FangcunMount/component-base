@@ -22,8 +22,23 @@ type subscriber struct {
 // lookupdAddrs: NSQLookupd 地址列表
 // cfg: NSQ 配置
 func NewSubscriber(lookupdAddrs []string, cfg *nsq.Config) (messaging.Subscriber, error) {
+	return NewSubscriberWithOptions(lookupdAddrs, cfg, messaging.SubscriberOptions{})
+}
+
+// NewSubscriberWithOptions is the additive bounded-delivery constructor.
+// A zero option preserves the historical cfg behavior.
+func NewSubscriberWithOptions(lookupdAddrs []string, cfg *nsq.Config, opts messaging.SubscriberOptions) (messaging.Subscriber, error) {
 	if cfg == nil {
 		cfg = nsq.NewConfig()
+	} else {
+		copy := *cfg
+		cfg = &copy
+	}
+	if opts.MaxInFlight > 0 {
+		cfg.MaxInFlight = opts.MaxInFlight
+	}
+	if opts.MaxAttempts > 0 {
+		cfg.MaxAttempts = uint16(opts.MaxAttempts)
 	}
 
 	if len(lookupdAddrs) == 0 {

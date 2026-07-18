@@ -39,6 +39,28 @@ type Subscriber interface {
 	Close() error
 }
 
+// SubscriberOptions adds bounded delivery controls without changing the
+// existing Subscriber interface or NewSubscriber constructors. Providers may
+// adopt these options through their additive NewSubscriberWithOptions API.
+type SubscriberOptions struct {
+	MaxInFlight          int
+	MaxAttempts          int
+	FailedMessageHandler FailedMessageHandler
+}
+
+// FailedMessage describes a transport delivery that exhausted its budget.
+// Payload is the application message payload and retains the original UUID.
+type FailedMessage struct {
+	Provider string
+	Topic    string
+	Channel  string
+	Message  *Message
+	Attempts int
+	Cause    error
+}
+
+type FailedMessageHandler func(context.Context, FailedMessage) error
+
 // Handler 消息处理函数
 // 业务层通过实现此函数来处理接收到的消息
 type Handler func(ctx context.Context, msg *Message) error

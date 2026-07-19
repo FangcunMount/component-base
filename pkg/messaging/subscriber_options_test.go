@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestSubscriberOptionsFailedMessageContractRetainsOriginalMessage(t *testing.T) {
@@ -20,5 +21,20 @@ func TestSubscriberOptionsFailedMessageContractRetainsOriginalMessage(t *testing
 	}
 	if !called {
 		t.Fatal("failed-message handler did not retain delivery identity")
+	}
+}
+
+func TestRetryDelayUsesExponentialCapAndDeterministicJitter(t *testing.T) {
+	options := RetryBackoffOptions{BaseDelay: 30 * time.Second, MaxDelay: 5 * time.Minute, JitterFraction: .2}
+	first := RetryDelay(options, 1, "event-1")
+	capped := RetryDelay(options, 8, "event-1")
+	if first < 24*time.Second || first > 36*time.Second {
+		t.Fatalf("first delay = %s, want within 20%% jitter", first)
+	}
+	if capped < 4*time.Minute || capped > 6*time.Minute {
+		t.Fatalf("capped delay = %s, want within 20%% jitter", capped)
+	}
+	if again := RetryDelay(options, 8, "event-1"); again != capped {
+		t.Fatalf("delay is not deterministic: %s != %s", again, capped)
 	}
 }

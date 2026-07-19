@@ -3,6 +3,7 @@ package messaging
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // Publisher 消息发布者接口
@@ -45,7 +46,16 @@ type Subscriber interface {
 type SubscriberOptions struct {
 	MaxInFlight          int
 	MaxAttempts          int
+	RetryBackoff         RetryBackoffOptions
 	FailedMessageHandler FailedMessageHandler
+}
+
+// RetryBackoffOptions configures provider delivery retry delays. Zero values
+// preserve the provider's historical retry behavior.
+type RetryBackoffOptions struct {
+	BaseDelay      time.Duration
+	MaxDelay       time.Duration
+	JitterFraction float64
 }
 
 // FailedMessage describes a transport delivery that exhausted its budget.

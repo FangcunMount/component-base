@@ -2,6 +2,7 @@ package nsq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -14,6 +15,7 @@ type subscriber struct {
 	consumers []*nsq.Consumer
 	config    *nsq.Config
 	lookupd   []string
+	options   messaging.SubscriberOptions
 	mu        sync.RWMutex
 	stopped   bool
 }
@@ -38,7 +40,9 @@ func NewSubscriberWithOptions(lookupdAddrs []string, cfg *nsq.Config, opts messa
 		cfg.MaxInFlight = opts.MaxInFlight
 	}
 	if opts.MaxAttempts > 0 {
-		cfg.MaxAttempts = uint16(opts.MaxAttempts)
+		// The adapter owns the terminal handoff so a failed dead-letter write can
+		// be retried without invoking the business handler again.
+		cfg.MaxAttempts = 0
 	}
 
 	if len(lookupdAddrs) == 0 {
@@ -49,6 +53,7 @@ func NewSubscriberWithOptions(lookupdAddrs []string, cfg *nsq.Config, opts messa
 		consumers: make([]*nsq.Consumer, 0),
 		config:    cfg,
 		lookupd:   lookupdAddrs,
+		options:   opts,
 		stopped:   false,
 	}, nil
 }
@@ -79,7 +84,8 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 		// 将 NSQ 的 Message 转换为领域层的 Message
 		domainMsg, ok, err := messaging.DecodeMessagePayload(message.Body)
 		if err != nil {
-			return fmt.Errorf("failed to decode message envelope: %w", err)
+			domainMsg = &messaging.Message{UUID: string(message.ID[:]), Payload: message.Body, Metadata: make(map[string]string)}
+			return s.failDelivery(context.Background(), topic, channel, message, domainMsg, fmt.Errorf("failed to decode message envelope: %w", err))
 		}
 		if !ok {
 			domainMsg = &messaging.Message{
@@ -98,15 +104,21 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 		domainMsg.Timestamp = message.Timestamp
 		domainMsg.Topic = topic
 		domainMsg.Channel = channel
+		if s.options.MaxAttempts > 0 && int(message.Attempts) > s.options.MaxAttempts {
+			return s.failDelivery(context.Background(), topic, channel, message, domainMsg, errors.New("transport delivery exhausted"))
+		}
 
 		// 注入 Ack/Nack 函数
+		var handlerErr error
 		domainMsg.SetAckFunc(func() error {
 			message.Finish()
 			return nil
 		})
 		domainMsg.SetNackFunc(func() error {
-			message.Requeue(-1)
-			return nil
+			if handlerErr == nil {
+				handlerErr = errors.New("message nacked by handler")
+			}
+			return s.failDelivery(context.Background(), topic, channel, message, domainMsg, handlerErr)
 		})
 
 		// 创建 context（可以注入 trace、timeout 等）
@@ -114,11 +126,12 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 
 		// 调用业务层的 handler
 		if err := handler(ctx, domainMsg); err != nil {
+			handlerErr = err
 			// 如果处理失败，自动 Nack（重新入队）
 			if !domainMsg.IsSettled() {
-				domainMsg.Nack()
+				return domainMsg.Nack()
 			}
-			return err
+			return nil
 		}
 
 		// 处理成功，自动 Ack
@@ -137,6 +150,28 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 	// 保存 consumer 引用
 	s.consumers = append(s.consumers, consumer)
 
+	return nil
+}
+
+func (s *subscriber) failDelivery(ctx context.Context, topic, channel string, raw *nsq.Message, message *messaging.Message, cause error) error {
+	if s.options.MaxAttempts <= 0 {
+		raw.Requeue(-1)
+		return nil
+	}
+	if int(raw.Attempts) < s.options.MaxAttempts {
+		raw.Requeue(messaging.RetryDelay(s.options.RetryBackoff, int(raw.Attempts), message.UUID))
+		return nil
+	}
+	if s.options.FailedMessageHandler == nil {
+		raw.Requeue(messaging.RetryDelay(s.options.RetryBackoff, int(raw.Attempts), message.UUID))
+		return errors.New("failed-message handler is not configured")
+	}
+	failed := messaging.FailedMessage{Provider: "nsq", Topic: topic, Channel: channel, Message: message, Attempts: s.options.MaxAttempts, Cause: cause}
+	if err := s.options.FailedMessageHandler(ctx, failed); err != nil {
+		raw.Requeue(messaging.RetryDelay(s.options.RetryBackoff, int(raw.Attempts), message.UUID))
+		return fmt.Errorf("failed to persist exhausted NSQ message: %w", err)
+	}
+	raw.Finish()
 	return nil
 }
 

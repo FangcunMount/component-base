@@ -39,6 +39,12 @@ func NewSubscriber(url string) (messaging.Subscriber, error) {
 // NewSubscriberWithOptions enables bounded retry topology when MaxAttempts is
 // positive. Zero options preserve the historical immediate-requeue behavior.
 func NewSubscriberWithOptions(url string, opts messaging.SubscriberOptions) (messaging.Subscriber, error) {
+	if opts.MaxAttempts < 0 {
+		return nil, fmt.Errorf("max attempts cannot be negative")
+	}
+	if opts.MaxAttempts > 0 && opts.FailedMessageHandler == nil {
+		return nil, fmt.Errorf("failed-message handler is required when max attempts is configured")
+	}
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("连接 RabbitMQ 失败: %w", err)
@@ -114,7 +120,11 @@ func (s *subscriber) declareRetryTopology(topic, channel string) error {
 	if err := s.channel.QueueBind(dlq, channel, topic+".dlx", false, nil); err != nil {
 		return fmt.Errorf("bind dead-letter queue: %w", err)
 	}
-	for attempt := 1; attempt <= s.options.MaxAttempts; attempt++ {
+	firstRetryAttempt := 2
+	if s.options.MaxAttempts == 1 {
+		firstRetryAttempt = 1
+	}
+	for attempt := firstRetryAttempt; attempt <= s.options.MaxAttempts; attempt++ {
 		queue := fmt.Sprintf("%s.retry.%d", channel, attempt)
 		args := amqp.Table{"x-dead-letter-exchange": topic}
 		if _, err := s.channel.QueueDeclare(queue, true, false, false, false, args); err != nil {
@@ -145,17 +155,27 @@ func (s *subscriber) consume(ctx context.Context, done chan struct{}, topic, cha
 }
 
 func (s *subscriber) handleDelivery(ctx context.Context, topic, channel string, delivery amqp.Delivery, handler messaging.Handler) {
-	attempt := rabbitAttempt(delivery.Headers)
-	message := &messaging.Message{UUID: delivery.MessageId, Payload: delivery.Body, Metadata: map[string]string{}, Timestamp: delivery.Timestamp.UnixNano(), Topic: topic, Channel: channel, Attempts: uint16(attempt)}
+	attempt, failedOnly, metadataErr := rabbitDeliveryMetadata(delivery.Headers)
+	effectiveAttempt := attempt
+	if s.options.MaxAttempts > 0 && effectiveAttempt > s.options.MaxAttempts {
+		effectiveAttempt = s.options.MaxAttempts
+	}
+	message := &messaging.Message{UUID: delivery.MessageId, Payload: delivery.Body, Metadata: map[string]string{}, Timestamp: delivery.Timestamp.UnixNano(), Topic: topic, Channel: channel, Attempts: uint16(effectiveAttempt)}
 	if message.UUID == "" {
 		message.UUID = strconv.FormatUint(delivery.DeliveryTag, 10)
 	}
 	for key, value := range delivery.Headers {
 		message.Metadata[key] = fmt.Sprint(value)
 	}
-	if s.options.MaxAttempts > 0 && (rabbitHeaderBool(delivery.Headers, rabbitFailedOnlyHeader) || attempt > s.options.MaxAttempts) {
-		cause := errors.New(rabbitHeaderString(delivery.Headers, rabbitLastErrorHeader, "transport delivery exhausted"))
-		_ = s.failDelivery(ctx, topic, channel, delivery, message, s.options.MaxAttempts, cause)
+	if s.options.MaxAttempts > 0 && (metadataErr != nil || failedOnly || attempt > s.options.MaxAttempts) {
+		cause := metadataErr
+		if cause == nil {
+			cause = errors.New(rabbitHeaderString(delivery.Headers, rabbitLastErrorHeader, "transport delivery exhausted"))
+		}
+		if attempt > s.options.MaxAttempts {
+			attempt = s.options.MaxAttempts
+		}
+		_ = s.failDelivery(ctx, topic, channel, delivery, message, attempt, cause, true)
 		return
 	}
 	var handlerErr error
@@ -164,7 +184,7 @@ func (s *subscriber) handleDelivery(ctx context.Context, topic, channel string, 
 		if handlerErr == nil {
 			handlerErr = errors.New("message nacked by handler")
 		}
-		return s.failDelivery(ctx, topic, channel, delivery, message, attempt, handlerErr)
+		return s.failDelivery(ctx, topic, channel, delivery, message, attempt, handlerErr, false)
 	})
 	if err := handler(ctx, message); err != nil {
 		handlerErr = err
@@ -178,12 +198,12 @@ func (s *subscriber) handleDelivery(ctx context.Context, topic, channel string, 
 	}
 }
 
-func (s *subscriber) failDelivery(ctx context.Context, topic, channel string, delivery amqp.Delivery, message *messaging.Message, attempt int, cause error) error {
+func (s *subscriber) failDelivery(ctx context.Context, topic, channel string, delivery amqp.Delivery, message *messaging.Message, attempt int, cause error, failedOnly bool) error {
 	if s.options.MaxAttempts <= 0 {
 		return delivery.Nack(false, true)
 	}
 	if attempt < s.options.MaxAttempts {
-		return s.publishRetry(ctx, topic, channel, delivery, message.UUID, attempt+1, cause, false)
+		return s.publishRetry(ctx, topic, channel, delivery, message.UUID, attempt+1, cause, failedOnly)
 	}
 	failed := messaging.FailedMessage{Provider: "rabbitmq", Topic: topic, Channel: channel, Message: message, Attempts: s.options.MaxAttempts, Cause: cause}
 	if s.options.FailedMessageHandler == nil {
@@ -229,31 +249,73 @@ func cloneRabbitPublishing(delivery amqp.Delivery) amqp.Publishing {
 }
 
 func rabbitAttempt(headers amqp.Table) int {
-	if headers == nil {
-		return 1
-	}
-	switch value := headers[rabbitDeliveryAttemptHeader].(type) {
-	case int32:
-		return int(value)
-	case int64:
-		return int(value)
-	case int:
-		return value
-	case string:
-		if parsed, err := strconv.Atoi(value); err == nil && parsed > 0 {
-			return parsed
-		}
-	}
-	return 1
+	attempt, _ := parseRabbitAttempt(headers)
+	return attempt
 }
 
-func rabbitHeaderBool(headers amqp.Table, key string) bool {
+func parseRabbitAttempt(headers amqp.Table) (int, error) {
+	if headers == nil {
+		return 1, nil
+	}
+	value, exists := headers[rabbitDeliveryAttemptHeader]
+	if !exists {
+		return 1, nil
+	}
+	var attempt int
+	switch typed := value.(type) {
+	case int32:
+		attempt = int(typed)
+	case int64:
+		attempt = int(typed)
+	case int:
+		attempt = typed
+	case string:
+		parsed, err := strconv.Atoi(typed)
+		if err != nil {
+			return 1, fmt.Errorf("invalid %s header %q", rabbitDeliveryAttemptHeader, typed)
+		}
+		attempt = parsed
+	default:
+		return 1, fmt.Errorf("invalid %s header type %T", rabbitDeliveryAttemptHeader, value)
+	}
+	if attempt < 1 {
+		return 1, fmt.Errorf("invalid %s header %d", rabbitDeliveryAttemptHeader, attempt)
+	}
+	return attempt, nil
+}
+
+func rabbitDeliveryMetadata(headers amqp.Table) (int, bool, error) {
+	attempt, attemptErr := parseRabbitAttempt(headers)
+	failedOnly, failedOnlyErr := parseRabbitHeaderBool(headers, rabbitFailedOnlyHeader)
+	if attemptErr != nil && failedOnlyErr != nil {
+		return attempt, true, errors.Join(attemptErr, failedOnlyErr)
+	}
+	if attemptErr != nil {
+		return attempt, true, attemptErr
+	}
+	if failedOnlyErr != nil {
+		return attempt, true, failedOnlyErr
+	}
+	return attempt, failedOnly, nil
+}
+
+func parseRabbitHeaderBool(headers amqp.Table, key string) (bool, error) {
 	value, ok := headers[key]
 	if !ok {
-		return false
+		return false, nil
 	}
-	parsed, _ := strconv.ParseBool(fmt.Sprint(value))
-	return parsed
+	switch typed := value.(type) {
+	case bool:
+		return typed, nil
+	case string:
+		parsed, err := strconv.ParseBool(typed)
+		if err != nil {
+			return false, fmt.Errorf("invalid %s header %q", key, typed)
+		}
+		return parsed, nil
+	default:
+		return false, fmt.Errorf("invalid %s header type %T", key, value)
+	}
 }
 
 func rabbitHeaderString(headers amqp.Table, key, fallback string) string {

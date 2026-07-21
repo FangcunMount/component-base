@@ -6,7 +6,8 @@ import (
 	"log"
 	"time"
 
-	"gorm.io/driver/mysql"
+	mysqldriver "github.com/go-sql-driver/mysql"
+	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -21,7 +22,13 @@ type MySQLConfig struct {
 	MaxOpenConnections    int           `json:"max-open-connections" mapstructure:"max-open-connections"`
 	MaxConnectionLifeTime time.Duration `json:"max-connection-life-time" mapstructure:"max-connection-life-time"`
 	LogLevel              int           `json:"log-level" mapstructure:"log-level"`
-	Logger                logger.Interface
+	// Location controls DATETIME parsing. Empty preserves the historical Local
+	// behavior for existing callers.
+	Location string `json:"location" mapstructure:"location"`
+	// SessionTimeZone is applied by the MySQL driver whenever it opens a pooled
+	// connection. Empty leaves the server/session default unchanged.
+	SessionTimeZone string `json:"session-time-zone" mapstructure:"session-time-zone"`
+	Logger          logger.Interface
 }
 
 // MySQLConnection MySQL 连接实现
@@ -44,18 +51,15 @@ func (m *MySQLConnection) Type() DatabaseType {
 
 // Connect 连接 MySQL 数据库
 func (m *MySQLConnection) Connect() error {
-	dsn := fmt.Sprintf(`%s:%s@tcp(%s)/%s?charset=utf8&parseTime=%t&loc=%s&multiStatements=true`,
-		m.config.Username,
-		m.config.Password,
-		m.config.Host,
-		m.config.Database,
-		true,
-		"Local")
+	dsn, err := buildMySQLDSN(m.config)
+	if err != nil {
+		return err
+	}
 
 	// 打印 dsn
 	log.Printf("Connecting to MySQL at %s/%s as user %s", m.config.Host, m.config.Database, m.config.Username)
 
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+	db, err := gorm.Open(gormmysql.Open(dsn), &gorm.Config{
 		Logger: m.config.Logger,
 	})
 	if err != nil {
@@ -75,6 +79,34 @@ func (m *MySQLConnection) Connect() error {
 	m.client = db
 	log.Printf("MySQL connected successfully to %s/%s", m.config.Host, m.config.Database)
 	return nil
+}
+
+func buildMySQLDSN(config *MySQLConfig) (string, error) {
+	if config == nil {
+		return "", fmt.Errorf("mysql config is nil")
+	}
+	locationName := config.Location
+	if locationName == "" {
+		locationName = "Local"
+	}
+	location, err := time.LoadLocation(locationName)
+	if err != nil {
+		return "", fmt.Errorf("invalid mysql location %q: %w", locationName, err)
+	}
+	dsn := mysqldriver.NewConfig()
+	dsn.User = config.Username
+	dsn.Passwd = config.Password
+	dsn.Net = "tcp"
+	dsn.Addr = config.Host
+	dsn.DBName = config.Database
+	dsn.ParseTime = true
+	dsn.Loc = location
+	dsn.MultiStatements = true
+	dsn.Params = map[string]string{"charset": "utf8"}
+	if config.SessionTimeZone != "" {
+		dsn.Params["time_zone"] = "'" + config.SessionTimeZone + "'"
+	}
+	return dsn.FormatDSN(), nil
 }
 
 // Close 关闭 MySQL 连接

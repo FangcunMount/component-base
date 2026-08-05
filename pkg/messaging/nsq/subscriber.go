@@ -24,6 +24,8 @@ type subscriber struct {
 	terminalCauses   map[string]error
 	newProducer      nsqProducerFactory
 	connectHandoff   func(*nsq.Consumer, string) error
+	connectLookupd   func(*nsq.Consumer, []string) error
+	resolveProducers func(context.Context, []string, string) ([]string, error)
 	stopped          bool
 }
 
@@ -83,7 +85,11 @@ func NewSubscriberWithOptions(lookupdAddrs []string, cfg *nsq.Config, opts messa
 		connectHandoff: func(consumer *nsq.Consumer, address string) error {
 			return consumer.ConnectToNSQD(address)
 		},
-		stopped: false,
+		connectLookupd: func(consumer *nsq.Consumer, addresses []string) error {
+			return consumer.ConnectToNSQLookupds(addresses)
+		},
+		resolveProducers: resolveTopicProducers,
+		stopped:          false,
 	}, nil
 }
 
@@ -101,6 +107,7 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 		return err
 	}
 	consumers := []*nsq.Consumer{consumer}
+	registeredHandoffTopic := ""
 	if s.options.MaxAttempts > 0 {
 		handoff, handoffErr := s.newHandoffConsumer(topic, channel)
 		if handoffErr != nil {
@@ -108,22 +115,39 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 			return handoffErr
 		}
 		consumers = append(consumers, handoff)
-	}
-	for _, current := range consumers {
-		if err := current.ConnectToNSQLookupds(s.lookupd); err != nil {
-			for _, cleanup := range consumers {
-				cleanup.Stop()
-			}
-			return fmt.Errorf("failed to connect to lookupd: %w", err)
+		producerAddresses, resolveErr := s.resolveProducers(context.Background(), s.lookupd, topic)
+		if resolveErr != nil {
+			stopConsumers(consumers)
+			return fmt.Errorf("resolve NSQD producers for topic %s: %w", topic, resolveErr)
 		}
-	}
-	if len(consumers) > 1 {
+		for _, address := range producerAddresses {
+			if connectErr := s.connectHandoff(handoff, address); connectErr != nil && !errors.Is(connectErr, nsq.ErrAlreadyConnected) {
+				stopConsumers(consumers)
+				return fmt.Errorf("connect NSQ handoff consumer to %s: %w", address, connectErr)
+			}
+		}
+		registeredHandoffTopic = failedHandoffTopic(topic, channel)
 		s.handoffMu.Lock()
-		s.handoffConsumers[failedHandoffTopic(topic, channel)] = consumers[1]
+		s.handoffConsumers[registeredHandoffTopic] = handoff
 		s.handoffMu.Unlock()
+	}
+	if err := s.connectLookupd(consumer, s.lookupd); err != nil {
+		if registeredHandoffTopic != "" {
+			s.handoffMu.Lock()
+			delete(s.handoffConsumers, registeredHandoffTopic)
+			s.handoffMu.Unlock()
+		}
+		stopConsumers(consumers)
+		return fmt.Errorf("failed to connect business consumer to lookupd: %w", err)
 	}
 	s.consumers = append(s.consumers, consumers...)
 	return nil
+}
+
+func stopConsumers(consumers []*nsq.Consumer) {
+	for _, consumer := range consumers {
+		consumer.Stop()
+	}
 }
 
 func (s *subscriber) newConsumer(topic, channel string, handler messaging.Handler) (*nsq.Consumer, error) {

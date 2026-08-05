@@ -55,6 +55,7 @@ func TestSubscriberBoundedDeliveryWithRealNSQ(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	waitForLookupdTopic(t, lookupd, failedHandoffTopic(topic, channel))
 	publisher, err := NewPublisher(nsqd, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -210,6 +211,33 @@ func postNSQAdmin(address, path string) (*http.Response, error) {
 		return nil, err
 	}
 	return (&http.Client{Timeout: 5 * time.Second}).Do(request)
+}
+
+func waitForLookupdTopic(t *testing.T, lookupd, topic string) {
+	t.Helper()
+	base := lookupd
+	if !strings.Contains(base, "://") {
+		base = "http://" + base
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, base+"/lookup?topic="+url.QueryEscape(topic), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := (&http.Client{Timeout: time.Second}).Do(request)
+		if err == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				return
+			}
+			if response.StatusCode != http.StatusNotFound {
+				t.Fatalf("lookup handoff topic %q: status %s", topic, response.Status)
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("handoff topic %q remained TOPIC_NOT_FOUND after direct NSQD bootstrap", topic)
 }
 
 func envOr(key, fallback string) string {

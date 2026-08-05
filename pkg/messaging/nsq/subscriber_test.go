@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +30,114 @@ func TestNewSubscriberWithOptionsRejectsNegativeMaxAttempts(t *testing.T) {
 	_, err := NewSubscriberWithOptions([]string{"127.0.0.1:4161"}, nil, messaging.SubscriberOptions{MaxAttempts: -1})
 	if err == nil {
 		t.Fatal("subscriber accepted negative max attempts")
+	}
+}
+
+func TestResolveTopicProducersDeduplicatesAcrossLookupd(t *testing.T) {
+	t.Parallel()
+
+	newLookupd := func(producers string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			if request.URL.Path != "/lookup" || request.URL.Query().Get("topic") != "business-topic" {
+				t.Errorf("lookup request = %s?%s", request.URL.Path, request.URL.RawQuery)
+			}
+			_, _ = fmt.Fprintf(response, `{"producers":%s}`, producers)
+		}))
+	}
+	first := newLookupd(`[{"broadcast_address":"nsqd-a","tcp_port":4150},{"broadcast_address":"nsqd-b","tcp_port":4150}]`)
+	defer first.Close()
+	second := newLookupd(`[{"broadcast_address":"nsqd-b","tcp_port":4150},{"hostname":"nsqd-c","tcp_port":4250}]`)
+	defer second.Close()
+	failed := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		http.Error(response, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer failed.Close()
+
+	addresses, err := resolveTopicProducers(context.Background(), []string{first.URL, failed.URL, second.URL}, "business-topic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"nsqd-a:4150", "nsqd-b:4150", "nsqd-c:4250"}
+	if fmt.Sprint(addresses) != fmt.Sprint(want) {
+		t.Fatalf("producer addresses = %v, want %v", addresses, want)
+	}
+}
+
+func TestBoundedSubscribeConnectsOnlyBusinessConsumerToLookupd(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSubscriber(t, nil)
+	s.resolveProducers = func(context.Context, []string, string) ([]string, error) {
+		return []string{"nsqd-a:4150", "nsqd-b:4150"}, nil
+	}
+	lookupdCalls := 0
+	s.connectLookupd = func(*gonq.Consumer, []string) error {
+		lookupdCalls++
+		return nil
+	}
+	connected := make([]string, 0, 2)
+	s.connectHandoff = func(_ *gonq.Consumer, address string) error {
+		connected = append(connected, address)
+		return nil
+	}
+
+	if err := s.Subscribe("business-topic", "business-channel", func(context.Context, *messaging.Message) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Stop)
+	if lookupdCalls != 1 {
+		t.Fatalf("lookupd connections = %d, want only the business consumer", lookupdCalls)
+	}
+	if fmt.Sprint(connected) != fmt.Sprint([]string{"nsqd-a:4150", "nsqd-b:4150"}) {
+		t.Fatalf("handoff direct connections = %v", connected)
+	}
+}
+
+func TestBoundedSubscribeFailsClosedWhenProducerResolutionFails(t *testing.T) {
+	t.Parallel()
+
+	s := newTestSubscriber(t, nil)
+	s.resolveProducers = func(context.Context, []string, string) ([]string, error) {
+		return nil, errors.New("lookup unavailable")
+	}
+	lookupdCalls := 0
+	s.connectLookupd = func(*gonq.Consumer, []string) error {
+		lookupdCalls++
+		return nil
+	}
+
+	err := s.Subscribe("business-topic", "business-channel", func(context.Context, *messaging.Message) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "lookup unavailable") {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+	if lookupdCalls != 0 {
+		t.Fatalf("business lookupd connections = %d, want 0 after bootstrap failure", lookupdCalls)
+	}
+}
+
+func TestBoundedSubscribeIgnoresAlreadyConnectedButRejectsOtherDirectErrors(t *testing.T) {
+	t.Parallel()
+
+	newSubscriber := func(connect func(*gonq.Consumer, string) error) *subscriber {
+		s := newTestSubscriber(t, nil)
+		s.resolveProducers = func(context.Context, []string, string) ([]string, error) {
+			return []string{"nsqd-a:4150"}, nil
+		}
+		s.connectHandoff = connect
+		s.connectLookupd = func(*gonq.Consumer, []string) error { return nil }
+		return s
+	}
+
+	alreadyConnected := newSubscriber(func(*gonq.Consumer, string) error { return gonq.ErrAlreadyConnected })
+	if err := alreadyConnected.Subscribe("business-topic", "business-channel", func(context.Context, *messaging.Message) error { return nil }); err != nil {
+		t.Fatalf("ErrAlreadyConnected must be idempotent: %v", err)
+	}
+	alreadyConnected.Stop()
+
+	directErr := errors.New("dial failed")
+	failing := newSubscriber(func(*gonq.Consumer, string) error { return directErr })
+	if err := failing.Subscribe("business-topic", "business-channel", func(context.Context, *messaging.Message) error { return nil }); err == nil || !errors.Is(err, directErr) {
+		t.Fatalf("Subscribe() error = %v, want %v", err, directErr)
 	}
 }
 
@@ -78,6 +190,23 @@ func TestTerminalFailurePublishesHandoffBeforeFinishing(t *testing.T) {
 	failed, err := decodeFailedHandoff(producer.payload)
 	if err != nil || failed.Cause.Error() != "handler failed" || failed.Message.UUID != "message-1" {
 		t.Fatalf("published handoff = %#v, %v", failed, err)
+	}
+}
+
+func TestTerminalHandoffConnectionFailureRequeuesWithoutPublishing(t *testing.T) {
+	t.Parallel()
+	producer := &fakeNSQProducer{}
+	connectErr := errors.New("handoff dial failed")
+	s := newTestSubscriber(t, func(string, *gonq.Config) (nsqProducer, error) { return producer, nil })
+	s.connectHandoff = func(*gonq.Consumer, string) error { return connectErr }
+	raw, delegate := newRawMessage(8, "new-nsqd:4150", []byte("wire"))
+
+	err := s.failDelivery(context.Background(), "topic", "channel", raw, messaging.NewMessage("message-1", []byte("payload")), errors.New("handler failed"))
+	if err == nil || !errors.Is(err, connectErr) {
+		t.Fatalf("failDelivery() error = %v", err)
+	}
+	if delegate.requeues != 1 || delegate.finishes != 0 || len(producer.payload) != 0 {
+		t.Fatalf("settlement/publish = requeue:%d finish:%d payload:%d", delegate.requeues, delegate.finishes, len(producer.payload))
 	}
 }
 

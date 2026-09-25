@@ -115,6 +115,16 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 	consumers := []*nsq.Consumer{consumer}
 	registeredHandoffTopic := ""
 	if s.options.MaxAttempts > 0 {
+		registeredHandoffTopic = s.handoffTopic(topic, channel)
+		if s.options.FailedHandoffGroup != "" {
+			s.handoffMu.Lock()
+			duplicate := s.handoffConsumers[registeredHandoffTopic] != nil
+			s.handoffMu.Unlock()
+			if duplicate {
+				consumer.Stop()
+				return fmt.Errorf("NSQ failed handoff group %q is already subscribed to topic %q in this subscriber", s.options.FailedHandoffGroup, topic)
+			}
+		}
 		handoff, handoffErr := s.newHandoffConsumer(topic, channel)
 		if handoffErr != nil {
 			consumer.Stop()
@@ -132,13 +142,7 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 				return fmt.Errorf("connect NSQ handoff consumer to %s: %w", address, connectErr)
 			}
 		}
-		registeredHandoffTopic = s.handoffTopic(topic, channel)
 		s.handoffMu.Lock()
-		if s.options.FailedHandoffGroup != "" && s.handoffConsumers[registeredHandoffTopic] != nil {
-			s.handoffMu.Unlock()
-			stopConsumers(consumers)
-			return fmt.Errorf("NSQ failed handoff group %q is already subscribed to topic %q in this subscriber", s.options.FailedHandoffGroup, topic)
-		}
 		s.handoffConsumers[registeredHandoffTopic] = handoff
 		s.handoffMu.Unlock()
 	}

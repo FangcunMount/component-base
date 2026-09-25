@@ -134,6 +134,11 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 		}
 		registeredHandoffTopic = s.handoffTopic(topic, channel)
 		s.handoffMu.Lock()
+		if s.options.FailedHandoffGroup != "" && s.handoffConsumers[registeredHandoffTopic] != nil {
+			s.handoffMu.Unlock()
+			stopConsumers(consumers)
+			return fmt.Errorf("NSQ failed handoff group %q is already subscribed to topic %q in this subscriber", s.options.FailedHandoffGroup, topic)
+		}
 		s.handoffConsumers[registeredHandoffTopic] = handoff
 		s.handoffMu.Unlock()
 	}

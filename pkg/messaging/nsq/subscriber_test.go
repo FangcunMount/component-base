@@ -73,6 +73,23 @@ func TestFailedHandoffGroupRequiresBoundedDeliveryAndTrimmedName(t *testing.T) {
 	}
 }
 
+func TestFailedHandoffGroupRejectsDuplicateTopicWithinSubscriber(t *testing.T) {
+	s := newTestSubscriber(t, nil)
+	s.options.FailedHandoffGroup = "authz-audit"
+	s.resolveProducers = func(context.Context, []string, string) ([]string, error) {
+		return []string{"nsqd:4150"}, nil
+	}
+	s.connectLookupd = func(*gonq.Consumer, []string) error { return nil }
+	handler := func(context.Context, *messaging.Message) error { return nil }
+	if err := s.Subscribe("iam.authz.version.v2", "first#ephemeral", handler); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Stop)
+	if err := s.Subscribe("iam.authz.version.v2", "second#ephemeral", handler); err == nil {
+		t.Fatal("same subscriber accepted two handoff consumers for one shared topic")
+	}
+}
+
 func TestResolveTopicProducersDeduplicatesAcrossLookupd(t *testing.T) {
 	t.Parallel()
 

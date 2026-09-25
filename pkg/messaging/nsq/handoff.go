@@ -16,16 +16,17 @@ const (
 )
 
 type failedHandoffEnvelope struct {
-	Type      string            `json:"type"`
-	Provider  string            `json:"provider"`
-	Topic     string            `json:"topic"`
-	Channel   string            `json:"channel"`
-	UUID      string            `json:"uuid"`
-	Metadata  map[string]string `json:"metadata,omitempty"`
-	Payload   []byte            `json:"payload"`
-	Attempts  int               `json:"attempts"`
-	Timestamp int64             `json:"timestamp,omitempty"`
-	Cause     string            `json:"cause"`
+	Type               string            `json:"type"`
+	Provider           string            `json:"provider"`
+	Topic              string            `json:"topic"`
+	Channel            string            `json:"channel"`
+	UUID               string            `json:"uuid"`
+	TransportMessageID string            `json:"transport_message_id,omitempty"`
+	Metadata           map[string]string `json:"metadata,omitempty"`
+	Payload            []byte            `json:"payload"`
+	Attempts           int               `json:"attempts"`
+	Timestamp          int64             `json:"timestamp,omitempty"`
+	Cause              string            `json:"cause"`
 }
 
 func failedHandoffTopic(topic, channel string) string {
@@ -39,7 +40,7 @@ func encodeFailedHandoff(topic, channel string, message *messaging.Message, atte
 	}
 	envelope := failedHandoffEnvelope{
 		Type: failedHandoffEnvelopeType, Provider: "nsq", Topic: topic, Channel: channel,
-		UUID: message.UUID, Metadata: copyStringMap(message.Metadata), Payload: append([]byte(nil), message.Payload...),
+		UUID: message.UUID, TransportMessageID: message.TransportMessageID, Metadata: copyStringMap(message.Metadata), Payload: append([]byte(nil), message.Payload...),
 		Attempts: attempts, Timestamp: message.Timestamp, Cause: cause.Error(),
 	}
 	payload, err := json.Marshal(envelope)
@@ -58,7 +59,7 @@ func decodeFailedHandoff(payload []byte) (messaging.FailedMessage, error) {
 		return messaging.FailedMessage{}, fmt.Errorf("invalid NSQ failed-message handoff")
 	}
 	message := &messaging.Message{
-		UUID: envelope.UUID, Metadata: copyStringMap(envelope.Metadata), Payload: append([]byte(nil), envelope.Payload...),
+		UUID: envelope.UUID, TransportMessageID: envelope.TransportMessageID, Metadata: copyStringMap(envelope.Metadata), Payload: append([]byte(nil), envelope.Payload...),
 		Attempts: uint16(envelope.Attempts), Timestamp: envelope.Timestamp, Topic: envelope.Topic, Channel: envelope.Channel,
 	}
 	return messaging.FailedMessage{

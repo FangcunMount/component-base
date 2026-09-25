@@ -100,6 +100,11 @@ type Message struct {
 	// Timestamp 消息时间戳（纳秒）
 	Timestamp int64
 
+	// TransportMessageID is the broker's physical delivery identity when the
+	// adapter provides one. It is not the stable application UUID and is not
+	// serialized into the application message envelope.
+	TransportMessageID string
+
 	// Topic 消息主题
 	Topic string
 

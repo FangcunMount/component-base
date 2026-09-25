@@ -48,6 +48,10 @@ type SubscriberOptions struct {
 	MaxAttempts          int
 	RetryBackoff         RetryBackoffOptions
 	FailedMessageHandler FailedMessageHandler
+	// FailedHandoffGroup gives NSQ a stable, shared terminal handoff topic for
+	// subscribers of the same business topic. Empty preserves the historical
+	// per-channel topic. All members of a group must use the same failure audit.
+	FailedHandoffGroup string
 }
 
 // RetryBackoffOptions configures provider delivery retry delays. Zero values

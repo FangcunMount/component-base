@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/FangcunMount/component-base/pkg/messaging"
@@ -51,6 +52,11 @@ func NewSubscriberWithOptions(lookupdAddrs []string, cfg *nsq.Config, opts messa
 	}
 	if opts.MaxAttempts > 0 && opts.FailedMessageHandler == nil {
 		return nil, fmt.Errorf("failed-message handler is required when max attempts is configured")
+	}
+	if opts.FailedHandoffGroup != "" {
+		if opts.MaxAttempts == 0 || strings.TrimSpace(opts.FailedHandoffGroup) != opts.FailedHandoffGroup || strings.TrimSpace(opts.FailedHandoffGroup) == "" {
+			return nil, fmt.Errorf("failed handoff group requires bounded delivery and a non-blank, trimmed name")
+		}
 	}
 	if cfg == nil {
 		cfg = nsq.NewConfig()
@@ -109,6 +115,16 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 	consumers := []*nsq.Consumer{consumer}
 	registeredHandoffTopic := ""
 	if s.options.MaxAttempts > 0 {
+		registeredHandoffTopic = s.handoffTopic(topic, channel)
+		if s.options.FailedHandoffGroup != "" {
+			s.handoffMu.Lock()
+			duplicate := s.handoffConsumers[registeredHandoffTopic] != nil
+			s.handoffMu.Unlock()
+			if duplicate {
+				consumer.Stop()
+				return fmt.Errorf("NSQ failed handoff group %q is already subscribed to topic %q in this subscriber", s.options.FailedHandoffGroup, topic)
+			}
+		}
 		handoff, handoffErr := s.newHandoffConsumer(topic, channel)
 		if handoffErr != nil {
 			consumer.Stop()
@@ -126,7 +142,6 @@ func (s *subscriber) Subscribe(topic, channel string, handler messaging.Handler)
 				return fmt.Errorf("connect NSQ handoff consumer to %s: %w", address, connectErr)
 			}
 		}
-		registeredHandoffTopic = failedHandoffTopic(topic, channel)
 		s.handoffMu.Lock()
 		s.handoffConsumers[registeredHandoffTopic] = handoff
 		s.handoffMu.Unlock()
@@ -217,7 +232,7 @@ func (s *subscriber) prepareMessage(domainMsg *messaging.Message, topic, channel
 }
 
 func (s *subscriber) newHandoffConsumer(topic, channel string) (*nsq.Consumer, error) {
-	handoffTopic := failedHandoffTopic(topic, channel)
+	handoffTopic := s.handoffTopic(topic, channel)
 	consumer, err := nsq.NewConsumer(handoffTopic, failedHandoffChannel, s.config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create NSQ handoff consumer: %w", err)
@@ -273,7 +288,7 @@ func (s *subscriber) failDelivery(ctx context.Context, topic, channel string, ra
 		raw.RequeueWithoutBackoff(messaging.RetryDelay(s.options.RetryBackoff, int(raw.Attempts), message.UUID))
 		return fmt.Errorf("create NSQ handoff producer: %w", err)
 	}
-	if publishErr := producer.Publish(failedHandoffTopic(topic, channel), payload); publishErr != nil {
+	if publishErr := producer.Publish(s.handoffTopic(topic, channel), payload); publishErr != nil {
 		raw.RequeueWithoutBackoff(messaging.RetryDelay(s.options.RetryBackoff, int(raw.Attempts), message.UUID))
 		return fmt.Errorf("publish NSQ failed-message handoff: %w", publishErr)
 	}
@@ -286,7 +301,7 @@ func (s *subscriber) ensureHandoffReady(topic, channel, address string) error {
 	if address == "" {
 		return fmt.Errorf("NSQD address is unavailable for failed-message handoff")
 	}
-	handoffTopic := failedHandoffTopic(topic, channel)
+	handoffTopic := s.handoffTopic(topic, channel)
 	s.handoffMu.Lock()
 	defer s.handoffMu.Unlock()
 	consumer, exists := s.handoffConsumers[handoffTopic]
@@ -297,6 +312,13 @@ func (s *subscriber) ensureHandoffReady(topic, channel, address string) error {
 		return fmt.Errorf("connect NSQ handoff consumer to %s: %w", address, err)
 	}
 	return nil
+}
+
+func (s *subscriber) handoffTopic(topic, channel string) string {
+	if s.options.FailedHandoffGroup != "" {
+		return failedHandoffTopicForGroup(topic, s.options.FailedHandoffGroup)
+	}
+	return failedHandoffTopic(topic, channel)
 }
 
 func (s *subscriber) producerFor(address string) (nsqProducer, error) {

@@ -34,6 +34,11 @@ func failedHandoffTopic(topic, channel string) string {
 	return "cb.failed." + hex.EncodeToString(digest[:12])
 }
 
+func failedHandoffTopicForGroup(topic, group string) string {
+	digest := sha256.Sum256([]byte("group\x00" + topic + "\x00" + group))
+	return "cb.failed." + hex.EncodeToString(digest[:12])
+}
+
 func encodeFailedHandoff(topic, channel string, message *messaging.Message, attempts int, cause error) ([]byte, error) {
 	if message == nil || message.UUID == "" || topic == "" || channel == "" || attempts < 1 || cause == nil {
 		return nil, fmt.Errorf("invalid NSQ failed-message handoff")

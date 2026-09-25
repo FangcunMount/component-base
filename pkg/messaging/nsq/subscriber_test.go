@@ -33,6 +33,63 @@ func TestNewSubscriberWithOptionsRejectsNegativeMaxAttempts(t *testing.T) {
 	}
 }
 
+func TestFailedHandoffGroupUsesStableTopicWithoutLosingOriginalChannel(t *testing.T) {
+	group := "qs-authz-version"
+	s := &subscriber{options: messaging.SubscriberOptions{FailedHandoffGroup: group}}
+	first := s.handoffTopic("iam.authz.version.v2", "instance-a#ephemeral")
+	second := s.handoffTopic("iam.authz.version.v2", "instance-b#ephemeral")
+	if first != second || first == failedHandoffTopic("iam.authz.version.v2", "instance-a#ephemeral") {
+		t.Fatalf("shared handoff topic is not stable and separate from legacy: %q / %q", first, second)
+	}
+	if first == failedHandoffTopicForGroup("other-topic", group) || first == failedHandoffTopicForGroup("iam.authz.version.v2", "other-group") {
+		t.Fatal("shared handoff topic must be scoped by business topic and group")
+	}
+	message := messaging.NewMessage("message-1", []byte("payload"))
+	payload, err := encodeFailedHandoff("iam.authz.version.v2", "instance-a#ephemeral", message, 2, errors.New("failed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := decodeFailedHandoff(payload)
+	if err != nil || failed.Channel != "instance-a#ephemeral" || failed.Topic != "iam.authz.version.v2" {
+		t.Fatalf("original failure identity was lost: %#v, %v", failed, err)
+	}
+}
+
+func TestFailedHandoffGroupRequiresBoundedDeliveryAndTrimmedName(t *testing.T) {
+	handler := func(context.Context, messaging.FailedMessage) error { return nil }
+	for _, options := range []messaging.SubscriberOptions{
+		{FailedHandoffGroup: "group"},
+		{MaxAttempts: 2, FailedMessageHandler: handler, FailedHandoffGroup: " "},
+		{MaxAttempts: 2, FailedMessageHandler: handler, FailedHandoffGroup: " group"},
+	} {
+		if _, err := NewSubscriberWithOptions([]string{"127.0.0.1:4161"}, nil, options); err == nil {
+			t.Fatalf("accepted invalid handoff group: %#v", options)
+		}
+	}
+	if _, err := NewSubscriberWithOptions([]string{"127.0.0.1:4161"}, nil, messaging.SubscriberOptions{
+		MaxAttempts: 2, FailedMessageHandler: handler, FailedHandoffGroup: "group",
+	}); err != nil {
+		t.Fatalf("valid shared handoff group: %v", err)
+	}
+}
+
+func TestFailedHandoffGroupRejectsDuplicateTopicWithinSubscriber(t *testing.T) {
+	s := newTestSubscriber(t, nil)
+	s.options.FailedHandoffGroup = "authz-audit"
+	s.resolveProducers = func(context.Context, []string, string) ([]string, error) {
+		return []string{"nsqd:4150"}, nil
+	}
+	s.connectLookupd = func(*gonq.Consumer, []string) error { return nil }
+	handler := func(context.Context, *messaging.Message) error { return nil }
+	if err := s.Subscribe("iam.authz.version.v2", "first#ephemeral", handler); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Stop)
+	if err := s.Subscribe("iam.authz.version.v2", "second#ephemeral", handler); err == nil {
+		t.Fatal("same subscriber accepted two handoff consumers for one shared topic")
+	}
+}
+
 func TestResolveTopicProducersDeduplicatesAcrossLookupd(t *testing.T) {
 	t.Parallel()
 

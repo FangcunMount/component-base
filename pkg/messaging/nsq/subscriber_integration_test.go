@@ -116,6 +116,141 @@ func TestSubscriberBoundedDeliveryWithRealNSQ(t *testing.T) {
 	}
 }
 
+func TestSubscriberSharedHandoffSurvivesEphemeralChannelRestart(t *testing.T) {
+	if os.Getenv("MESSAGING_INTEGRATION") != "1" {
+		t.Skip("set MESSAGING_INTEGRATION=1 and start the messaging test containers")
+	}
+	lookupd := envOr("NSQ_LOOKUPD_ADDR", "127.0.0.1:4161")
+	nsqd := envOr("NSQD_ADDR", "127.0.0.1:4150")
+	topic := fmt.Sprintf("component-base-shared-%d", time.Now().UnixNano())
+	group := "authz-audit"
+	firstChannel := "authz-first#ephemeral"
+	secondChannel := "authz-second#ephemeral"
+	handoffTopic := failedHandoffTopicForGroup(topic, group)
+	cleanupNSQTopics(t, topic, handoffTopic)
+	createNSQTopicAndChannel(t, topic, firstChannel)
+	waitForLookupdTopic(t, lookupd, topic)
+
+	firstAuditAttempt := make(chan struct{}, 1)
+	options := messaging.SubscriberOptions{
+		MaxInFlight: 1, MaxAttempts: 2, FailedHandoffGroup: group,
+		RetryBackoff: messaging.RetryBackoffOptions{BaseDelay: 50 * time.Millisecond, MaxDelay: 50 * time.Millisecond},
+		FailedMessageHandler: func(context.Context, messaging.FailedMessage) error {
+			select {
+			case firstAuditAttempt <- struct{}{}:
+			default:
+			}
+			return errors.New("audit unavailable")
+		},
+	}
+	firstSubscriber, err := NewSubscriberWithOptions([]string{lookupd}, nil, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := firstSubscriber.Subscribe(topic, firstChannel, func(context.Context, *messaging.Message) error {
+		return errors.New("business handler failed")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForLookupdTopic(t, lookupd, handoffTopic)
+	publisher, err := NewPublisher(nsqd, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisher.Close()
+	if err := publisher.PublishMessage(t.Context(), topic, messaging.NewMessage("shared-handoff-1", []byte("payload"))); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-firstAuditAttempt:
+	case <-time.After(20 * time.Second):
+		t.Fatal("timed out waiting for shared failed-message handoff")
+	}
+	if err := firstSubscriber.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitForNSQChannelAbsent(t, topic, firstChannel)
+
+	failedCh := make(chan messaging.FailedMessage, 1)
+	secondOptions := options
+	secondOptions.FailedMessageHandler = func(_ context.Context, failed messaging.FailedMessage) error {
+		failedCh <- failed
+		return nil
+	}
+	secondSubscriber, err := NewSubscriberWithOptions([]string{lookupd}, nil, secondOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = secondSubscriber.Close() })
+	if err := secondSubscriber.Subscribe(topic, secondChannel, func(context.Context, *messaging.Message) error {
+		return errors.New("terminal handoff must not re-enter business handler")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case failed := <-failedCh:
+		if failed.Topic != topic || failed.Channel != firstChannel || failed.Message == nil || failed.Message.UUID != "shared-handoff-1" || failed.Attempts != 2 {
+			t.Fatalf("failed handoff lost original identity: %#v", failed)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("timed out waiting for shared handoff after ephemeral channel restart")
+	}
+	if err := secondSubscriber.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitForNSQChannelAbsent(t, topic, secondChannel)
+	if !nsqChannelExists(t, handoffTopic, failedHandoffChannel) {
+		t.Fatal("shared terminal handoff channel did not remain durable after subscribers stopped")
+	}
+}
+
+func waitForNSQChannelAbsent(t *testing.T, topic, channel string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !nsqChannelExists(t, topic, channel) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("ephemeral channel %s/%s remained after subscriber shutdown", topic, channel)
+}
+
+func nsqChannelExists(t *testing.T, topic, channel string) bool {
+	t.Helper()
+	address := envOr("NSQD_HTTP_ADDR", "127.0.0.1:4151")
+	response, err := (&http.Client{Timeout: time.Second}).Get("http://" + address + "/stats?format=json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("NSQD stats status = %s", response.Status)
+	}
+	var stats struct {
+		Topics []struct {
+			Name     string `json:"topic_name"`
+			Channels []struct {
+				Name string `json:"channel_name"`
+			} `json:"channels"`
+		} `json:"topics"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&stats); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range stats.Topics {
+		if item.Name != topic {
+			continue
+		}
+		for _, found := range item.Channels {
+			if found.Name == channel {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestSubscriberDecodeFailureNeverCallsBusinessHandler(t *testing.T) {
 	if os.Getenv("MESSAGING_INTEGRATION") != "1" {
 		t.Skip("set MESSAGING_INTEGRATION=1 and start the messaging test containers")

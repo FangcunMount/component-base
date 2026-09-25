@@ -211,6 +211,7 @@ func (s *subscriber) prepareMessage(domainMsg *messaging.Message, topic, channel
 	}
 	domainMsg.Attempts = raw.Attempts
 	domainMsg.Timestamp = raw.Timestamp
+	domainMsg.TransportMessageID = string(raw.ID[:])
 	domainMsg.Topic = topic
 	domainMsg.Channel = channel
 }
@@ -232,7 +233,7 @@ func (s *subscriber) handleHandoff(ctx context.Context, handoffTopic string, raw
 	if decodeErr != nil {
 		failed = messaging.FailedMessage{
 			Provider: "nsq", Topic: handoffTopic, Channel: failedHandoffChannel, Attempts: s.options.MaxAttempts,
-			Message: &messaging.Message{UUID: string(raw.ID[:]), Payload: append([]byte(nil), raw.Body...), Attempts: raw.Attempts, Timestamp: raw.Timestamp, Topic: handoffTopic, Channel: failedHandoffChannel},
+			Message: &messaging.Message{UUID: string(raw.ID[:]), TransportMessageID: string(raw.ID[:]), Payload: append([]byte(nil), raw.Body...), Attempts: raw.Attempts, Timestamp: raw.Timestamp, Topic: handoffTopic, Channel: failedHandoffChannel},
 			Cause:   decodeErr,
 		}
 	}

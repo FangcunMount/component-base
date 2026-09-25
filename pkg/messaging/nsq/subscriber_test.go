@@ -145,6 +145,7 @@ func TestFailedHandoffRoundTripPreservesOriginalFailure(t *testing.T) {
 	message := messaging.NewMessage("message-1", []byte("payload"))
 	message.Metadata["event_type"] = "sample.created"
 	message.Timestamp = 123
+	message.TransportMessageID = "physical-nsq-id-1"
 	payload, err := encodeFailedHandoff("topic", "channel", message, 8, errors.New("handler failed"))
 	if err != nil {
 		t.Fatal(err)
@@ -156,8 +157,26 @@ func TestFailedHandoffRoundTripPreservesOriginalFailure(t *testing.T) {
 	if failed.Provider != "nsq" || failed.Topic != "topic" || failed.Channel != "channel" || failed.Attempts != 8 || failed.Cause.Error() != "handler failed" {
 		t.Fatalf("failed handoff = %#v", failed)
 	}
-	if failed.Message.UUID != message.UUID || string(failed.Message.Payload) != "payload" || failed.Message.Metadata["event_type"] != "sample.created" || failed.Message.Timestamp != 123 {
+	if failed.Message.UUID != message.UUID || failed.Message.TransportMessageID != message.TransportMessageID || string(failed.Message.Payload) != "payload" || failed.Message.Metadata["event_type"] != "sample.created" || failed.Message.Timestamp != 123 {
 		t.Fatalf("handoff message = %#v", failed.Message)
+	}
+}
+
+func TestSubscriberKeepsLogicalUUIDAndPhysicalNSQMessageIDSeparate(t *testing.T) {
+	s := newTestSubscriber(t, nil)
+	raw, _ := newRawMessage(2, "nsqd:4150", []byte("wire"))
+	message := messaging.NewMessage("logical-event-id", []byte("payload"))
+	s.prepareMessage(message, "topic", "channel", raw)
+	if message.UUID != "logical-event-id" || message.TransportMessageID != string(raw.ID[:]) || message.Attempts != 2 {
+		t.Fatalf("prepared message = %#v", message)
+	}
+	encoded, err := messaging.EncodeMessagePayload(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, ok, err := messaging.DecodeMessagePayload(encoded)
+	if err != nil || !ok || decoded.TransportMessageID != "" || decoded.UUID != message.UUID {
+		t.Fatalf("application envelope carried transport identity: %#v, %t, %v", decoded, ok, err)
 	}
 }
 

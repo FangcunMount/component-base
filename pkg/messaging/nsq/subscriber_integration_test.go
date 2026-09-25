@@ -31,6 +31,7 @@ func TestSubscriberBoundedDeliveryWithRealNSQ(t *testing.T) {
 
 	var handlerCalls atomic.Int32
 	var failedCalls atomic.Int32
+	firstTransportID := make(chan string, 1)
 	firstAuditAttempt := make(chan struct{}, 1)
 	failedCh := make(chan messaging.FailedMessage, 1)
 	options := messaging.SubscriberOptions{
@@ -49,8 +50,12 @@ func TestSubscriberBoundedDeliveryWithRealNSQ(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := firstSubscriber.Subscribe(topic, channel, func(context.Context, *messaging.Message) error {
+	if err := firstSubscriber.Subscribe(topic, channel, func(_ context.Context, received *messaging.Message) error {
 		handlerCalls.Add(1)
+		select {
+		case firstTransportID <- received.TransportMessageID:
+		default:
+		}
 		return errors.New("handler failed")
 	}); err != nil {
 		t.Fatal(err)
@@ -96,6 +101,9 @@ func TestSubscriberBoundedDeliveryWithRealNSQ(t *testing.T) {
 	case failed := <-failedCh:
 		if failed.Attempts != 8 || failed.Message == nil || failed.Message.UUID != message.UUID || string(failed.Message.Payload) != "payload" || failed.Cause == nil || failed.Cause.Error() != "handler failed" {
 			t.Fatalf("failed message = %#v", failed)
+		}
+		if originalTransportID := <-firstTransportID; originalTransportID == "" || failed.Message.TransportMessageID != originalTransportID || originalTransportID == message.UUID {
+			t.Fatalf("physical NSQ identity was not preserved: original=%q failed=%#v", originalTransportID, failed.Message)
 		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("timed out waiting for NSQ handoff after subscriber restart")

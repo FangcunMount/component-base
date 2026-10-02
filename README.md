@@ -5,8 +5,9 @@ Scheme, typing, encoding, decoding, and conversion packages for FangcunMont proj
 
 下一版本不再提供 `pkg/messaging`、`pkg/event`、`pkg/eventcatalog`、
 `pkg/eventcodec`、`pkg/eventmessaging`、`pkg/outbox` 和 `pkg/outboxcore`。
-NSQ／RabbitMQ 发布订阅、消息封装、重试及 Outbox 共性职责由
+NSQ 发布订阅、消息封装、重试及 Outbox 共性职责由
 [reliable-messaging](https://github.com/FangcunMount/reliable-messaging) 承接；
+首期 SDK 仅支持 NSQ，旧 RabbitMQ 入口在本次退役，不承诺替代支持。
 业务事件、事务边界、业务幂等和失败处置仍由服务负责。
 
 这是删除公开 API 的不兼容变更，计划以 `v0.7.0` 发布。升级前须清理

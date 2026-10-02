@@ -68,9 +68,6 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/alicebob/miniredis/v2 v2.30.0
 	github.com/gin-gonic/gin v1.11.0
-	github.com/google/uuid v1.6.0
-	github.com/nsqio/go-nsq v1.1.0
-	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/redis/go-redis/v9 v9.16.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/pflag v1.0.10
@@ -79,7 +76,6 @@ require (
 	golang.org/x/time v0.12.0
 	google.golang.org/grpc v1.80.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
-	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/mysql v1.6.0
 	k8s.io/klog v1.0.0
 )

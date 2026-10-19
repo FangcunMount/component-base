@@ -2,8 +2,15 @@ package database
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"log"
+	"net"
+	"os"
+	"strings"
 	"time"
 
 	mysqldriver "github.com/go-sql-driver/mysql"
@@ -29,6 +36,8 @@ type MySQLConfig struct {
 	// connection. Empty leaves the server/session default unchanged.
 	SessionTimeZone string `json:"session-time-zone" mapstructure:"session-time-zone"`
 	Logger          logger.Interface
+	TLSMode         string `json:"tls-mode" mapstructure:"tls-mode"`
+	TLSCAFile       string `json:"tls-ca-file" mapstructure:"tls-ca-file"`
 }
 
 // MySQLConnection MySQL 连接实现
@@ -51,7 +60,7 @@ func (m *MySQLConnection) Type() DatabaseType {
 
 // Connect 连接 MySQL 数据库
 func (m *MySQLConnection) Connect() error {
-	dsn, err := buildMySQLDSN(m.config)
+	connector, err := NewMySQLConnector(m.config)
 	if err != nil {
 		return err
 	}
@@ -59,10 +68,12 @@ func (m *MySQLConnection) Connect() error {
 	// 打印 dsn
 	log.Printf("Connecting to MySQL at %s/%s as user %s", m.config.Host, m.config.Database, m.config.Username)
 
-	db, err := gorm.Open(gormmysql.Open(dsn), &gorm.Config{
+	pool := sql.OpenDB(connector)
+	db, err := gorm.Open(gormmysql.New(gormmysql.Config{Conn: pool}), &gorm.Config{
 		Logger: m.config.Logger,
 	})
 	if err != nil {
+		_ = pool.Close()
 		return fmt.Errorf("failed to connect to MySQL: %w", err)
 	}
 
@@ -82,8 +93,29 @@ func (m *MySQLConnection) Connect() error {
 }
 
 func buildMySQLDSN(config *MySQLConfig) (string, error) {
+	dsn, err := mysqlDriverConfig(config)
+	if err != nil {
+		return "", err
+	}
+	if dsn.TLS != nil {
+		return "", fmt.Errorf("TLS configuration cannot be serialized as a DSN; use NewMySQLConnector")
+	}
+	return dsn.FormatDSN(), nil
+}
+
+// NewMySQLConnector preserves TLS verification on every pooled connection.
+// Passing a typed Config avoids losing the CA context during DSN serialization.
+func NewMySQLConnector(config *MySQLConfig) (driver.Connector, error) {
+	dsn, err := mysqlDriverConfig(config)
+	if err != nil {
+		return nil, err
+	}
+	return mysqldriver.NewConnector(dsn)
+}
+
+func mysqlDriverConfig(config *MySQLConfig) (*mysqldriver.Config, error) {
 	if config == nil {
-		return "", fmt.Errorf("mysql config is nil")
+		return nil, fmt.Errorf("mysql config is nil")
 	}
 	locationName := config.Location
 	if locationName == "" {
@@ -91,7 +123,7 @@ func buildMySQLDSN(config *MySQLConfig) (string, error) {
 	}
 	location, err := time.LoadLocation(locationName)
 	if err != nil {
-		return "", fmt.Errorf("invalid mysql location %q: %w", locationName, err)
+		return nil, fmt.Errorf("invalid mysql location %q: %w", locationName, err)
 	}
 	dsn := mysqldriver.NewConfig()
 	dsn.User = config.Username
@@ -106,7 +138,10 @@ func buildMySQLDSN(config *MySQLConfig) (string, error) {
 	if config.SessionTimeZone != "" {
 		dsn.Params["time_zone"] = "'" + config.SessionTimeZone + "'"
 	}
-	return dsn.FormatDSN(), nil
+	if err := ConfigureMySQLTLS(dsn, config.TLSMode, config.TLSCAFile); err != nil {
+		return nil, err
+	}
+	return dsn, nil
 }
 
 // Close 关闭 MySQL 连接
@@ -135,4 +170,38 @@ func (m *MySQLConnection) HealthCheck(ctx context.Context) error {
 // GetClient 获取 MySQL 客户端
 func (m *MySQLConnection) GetClient() interface{} {
 	return m.client
+}
+
+// ConfigureMySQLTLS applies the same certificate policy to maintenance clients
+// that already own a driver Config (including their timeouts and DSN options).
+func ConfigureMySQLTLS(config *mysqldriver.Config, mode, caFile string) error {
+	if config == nil {
+		return fmt.Errorf("mysql driver config is nil")
+	}
+	config.TLS = nil
+	config.TLSConfig = ""
+	mode = strings.ToUpper(strings.TrimSpace(mode))
+	switch mode {
+	case "", "DISABLED":
+	case "VERIFY_IDENTITY":
+		if caFile == "" {
+			return fmt.Errorf("mysql TLS CA file is required for VERIFY_IDENTITY")
+		}
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return fmt.Errorf("read mysql TLS CA: %w", err)
+		}
+		roots := x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(pem) {
+			return fmt.Errorf("mysql TLS CA file contains no certificates")
+		}
+		host, _, err := net.SplitHostPort(config.Addr)
+		if err != nil || host == "" {
+			return fmt.Errorf("mysql VERIFY_IDENTITY requires host:port")
+		}
+		config.TLS = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: host}
+	default:
+		return fmt.Errorf("unsupported mysql TLS mode %q", mode)
+	}
+	return nil
 }

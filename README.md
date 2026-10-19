@@ -31,3 +31,7 @@ SDK 的可靠 broker 支持范围仍为 NSQ。
 宿主仍负责业务信号、权威状态、缓存和轮询兜底。不改变数据库事务、
 历史消息、任务授权、模型调用或原配置。旧接口可从固定 `v0.7.0` 取得，
 当前版本不保留转发门面。日志、数据库、锁和其他非消息基础能力不受影响。
+
+## MySQL TLS
+
+`database.MySQLConfig` 支持 `TLSMode=VERIFY_IDENTITY` 和 `TLSCAFile`。生产使用域名连接并校验 CA、主机名和 TLS 1.2+；证书或服务端 TLS 不满足要求时直接失败。空模式/`DISABLED` 仅保留现有本地连接行为。`NewMySQLConnector` 和 `ConfigureMySQLTLS` 可供维护工具复用，避免将 TLS context 序列化为 DSN 后丢失。

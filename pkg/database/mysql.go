@@ -134,7 +134,10 @@ func mysqlDriverConfig(config *MySQLConfig) (*mysqldriver.Config, error) {
 	dsn.ParseTime = true
 	dsn.Loc = location
 	dsn.MultiStatements = true
-	dsn.Params = map[string]string{"charset": "utf8"}
+	dsn.Params = map[string]string{}
+	if err := dsn.Apply(mysqldriver.Charset("utf8", "")); err != nil {
+		return nil, err
+	}
 	if config.SessionTimeZone != "" {
 		dsn.Params["time_zone"] = "'" + config.SessionTimeZone + "'"
 	}
